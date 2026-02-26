@@ -1,0 +1,72 @@
+[all]
+# Basic configuration
+arm_64bit=1
+kernel=vmlinuz
+cmdline=cmdline.txt
+initramfs initrd.img followkernel
+
+# Performance optimizations
+arm_boost=1                    # Maximum performance mode
+auto_initramfs=1              # Automatic initramfs loading
+
+# UART Configuration for UGV serial communication with motor controller
+dtparam=uart0=on              # Enable UART0
+enable_uart=1                 # Enable serial console
+
+# Disable Bluetooth to free up UART for UGV communication
+dtoverlay=disable-bt
+
+# Enable the audio output, I2C and SPI interfaces on the GPIO header
+dtparam=audio=on
+dtparam=i2c_arm=on
+dtparam=spi=on
+
+# Comment out the following line if the edges of the desktop appear outside
+# the edges of your display
+disable_overscan=1
+
+# If you have issues with audio, you may try uncommenting the following line
+# which forces the HDMI output into HDMI mode instead of DVI (which doesn't
+# support audio output)
+#hdmi_drive=2
+
+# Enable the KMS ("full" KMS) graphics overlay
+dtoverlay=vc4-kms-v3d
+disable_fw_kms_setup=1
+
+# Camera support (for libcamera)
+camera_auto_detect=1
+display_auto_detect=1
+
+# GPU Memory
+gpu_mem=128
+
+# Max framebuffers
+max_framebuffers=2
+
+# Config settings specific to arm64
+dtoverlay=dwc2
+
+[pi4]
+arm_boost=1
+
+[pi5]
+# Pi 5 specific settings
+dtparam=pciex1
+dtparam=pciex1_gen=3
+
+[pi3+]
+# Use a smaller contiguous memory area, specifically on the 3A+ to avoid an
+# OOM oops on boot
+dtoverlay=vc4-kms-v3d,cma-128
+
+[pi02]
+# The Zero 2W is another 512MB board which is occasionally affected by the same
+# OOM oops on boot
+dtoverlay=vc4-kms-v3d,cma-128
+
+[cm4]
+# Enable the USB2 outputs on the IO board
+dtoverlay=dwc2,dr_mode=host
+
+[all]

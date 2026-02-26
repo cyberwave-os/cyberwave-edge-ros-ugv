@@ -1,0 +1,629 @@
+# MQTT Bridge for ROS 2 and Cyberwave
+
+A bidirectional bridge between ROS 2 topics and MQTT, with integrated support for the Cyberwave digital twin platform. This bridge enables real-time synchronization between physical robots (like the UR7e) and cloud-based digital twins.
+
+## Features
+
+- ✅ **Bidirectional Communication**: ROS 2 ↔ MQTT in both directions
+- ✅ **Cyberwave SDK Integration**: Native support for Cyberwave digital twin platform
+- ✅ **Rate Limiting**: Intelligent upstream traffic control (100 Hz → 1 Hz)
+- ✅ **Joint State Mapping**: Automatic joint name transformation
+- ✅ **Configurable**: Environment variables and YAML configuration
+- ✅ **WebRTC Streaming**: Integrated ROS 2 image to WebRTC bridge (See **[WEBRTC_STREAMING.md](WEBRTC_STREAMING.md)**)
+- ✅ **Source Type Filtering**: Downstream filtering to only process `source_type: "tele"` messages (prevents accidental commands from editor/sim modes)
+
+## Quick Start
+
+- 🚀 **[UGV Beast Quickstart](README_UGV_QUICKSTART.md)**: Simple guide for UGV video streaming and teleop.
+- 🛠️ **UGV Helper Scripts**: See [UGV Beast Helper Scripts](#ugv-beast-helper-scripts) for automated startup and building.
+- ⚙️ **General Setup**: See below for detailed configuration.
+
+### 1. Set Up Environment
+
+Create a `.env` file in the workspace root:
+
+```bash
+# Cyberwave credentials
+CYBERWAVE_TOKEN=your_api_token_here
+CYBERWAVE_MQTT_BROKER=mqtt.cyberwave.com
+CYBERWAVE_MQTT_PORT=1883
+
+# Rate limiting (1 Hz = 1 second between publishes)
+MQTT_PUBLISH_RATE_LIMIT=1.0
+```
+
+
+```bash
+# or with pip (for virtualenvs)
+python3 -m pip install --user paho-mqtt pyyaml
+
+# or with uv
+uv pip install paho-mqtt pyyaml numpy cyberwave
+```
+
+### 2. Build the Package
+
+```bash
+cd /home/ws/ugv_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select mqtt_bridge
+source install/setup.bash
+```
+
+### 3. Launch the Bridge
+
+```bash
+./launch_bridge_with_env.sh
+```
+
+## UGV Beast Helper Scripts
+
+For the UGV Beast model, pre-configured scripts are available in `scripts/ugv_beast/` to simplify environment setup and development:
+
+### 1. Full Environment Startup
+Automatically cleans up existing processes and starts the entire UGV stack (Bringup, Driver, Vision, BaseNode, and MQTT Bridge) in a managed `tmux` session with separate windows for each component.
+
+```bash
+# Start everything
+/root/ugv_ws/src/mqtt_bridge/scripts/ugv_beast/start_ugv.sh
+
+# Start everything and automatically attach to logs
+/root/ugv_ws/src/mqtt_bridge/scripts/ugv_beast/start_ugv.sh --logs
+
+# Start hardware only (skip MQTT bridge for manual execution)
+/root/ugv_ws/src/mqtt_bridge/scripts/ugv_beast/start_ugv.sh --no-bridge
+```
+*   **View processes**: `tmux attach -t ugv_env`
+*   **Navigation**: Use `Ctrl+B` then `n`/`p` to switch between windows.
+
+### 2. MQTT Bridge Clean Build & Run
+Removes existing build/install artifacts for the bridge, performs a fresh `colcon build`, and runs the node with the default UGV parameters.
+
+```bash
+# Rebuild and run (logs shown by default)
+/root/ugv_ws/src/mqtt_bridge/scripts/ugv_beast/clean_build_mqtt.sh
+
+# Rebuild and run with explicit logs flag
+/root/ugv_ws/src/mqtt_bridge/scripts/ugv_beast/clean_build_mqtt.sh --logs
+
+# Rebuild ONLY (do not run)
+/root/ugv_ws/src/mqtt_bridge/scripts/ugv_beast/clean_build_mqtt.sh --no-run
+```
+
+---
+
+You should see:
+
+```
+Starting MQTT Bridge with Cyberwave SDK...
+  MQTT Broker: mqtt.cyberwave.com
+  MQTT Port: 1883
+  Token: abc12345... (masked)
+  Rate Limit (ROS->MQTT): 1.0s between publishes (1.00 Hz)
+
+[mqtt_bridge_node]: ROS->MQTT rate limiting enabled: 1.00s between publishes (1.00 Hz)
+```
+
+## Source Type Filtering
+
+The MQTT bridge implements downstream filtering to ensure only teleoperation commands reach the physical robot:
+
+**Downstream Filtering (MQTT → ROS)**:
+- ✅ **Processes**: Only messages with `source_type: "tele"` (from frontend live mode)
+- ❌ **Ignores**: Messages with `source_type: "edit"`, `"sim"`, or `"edge"`
+
+**Purpose**: Prevents accidental commands from editor or simulator modes from reaching physical robots.
+
+**Upstream Messages (ROS → MQTT)**:
+- All upstream messages are tagged with `source_type: "edge"` automatically
+- No filtering applied (all edge messages are sent to cloud)
+
+**Implementation**: See `mqtt_bridge_node.py` → `_handle_mqtt_message()` method.
+
+📚 **See [cyberwave-backend/docs/SOURCE_TYPE_LOGIC.md](../../../cyberwave-backend/docs/SOURCE_TYPE_LOGIC.md) for complete documentation.**
+
+## Data Conventions & Units
+
+The bridge follows standard ROS 2 conventions for units and message structures. To avoid confusion, distinguish between **Upstream** and **Downstream** traffic.
+
+### Terminology
+*   **Upstream (ROS → MQTT)**: Data flowing from the physical robot or edge device to the Cyberwave cloud (telemetry, status, odometry).
+*   **Downstream (MQTT → ROS)**: Commands flowing from the Cyberwave cloud/frontend to the physical robot (movement, IO toggles).
+
+### Standard Units
+| Data Type | Unit | Description |
+| :--- | :--- | :--- |
+| Linear Velocity | meters per second (**m/s**) | Used in `/cmd_vel`. |
+| Angular Velocity | radians per second (**rad/s**) | Used in `/cmd_vel` (Z-axis for steering). |
+| Joint Position | radians (**rad**) | Standard for revolute joints. |
+| Joint Position | meters (**m**) | Standard for prismatic joints. |
+| LED Brightness | integer (**0-255**) | 8-bit intensity (e.g., UGV Beast headlights). |
+
+### Command Formats
+Note the difference between ROS-native structures and task-specific parameters:
+
+1.  **Twist Messages (`cmd_vel`)**:
+    *   **Format**: Uses dictionaries for `linear` and `angular` components.
+    *   **Example**: `{"linear": {"x": 0.5, "y": 0, "z": 0}, "angular": {"x": 0, "y": 0, "z": 1.0}}`
+2.  **Teleop Bindings**:
+    *   **Format**: Keyboard/Joystick bindings often use **scalars** (e.g., `linear: 1.0`) to represent normalized intensity or direction. These are processed by the controller and scaled by a "max speed" factor before being sent to the robot as the full dictionary format above.
+
+## Upstream Message Flow
+
+### From Robot to Cloud
+
+The bridge handles high-frequency robot data and converts it to efficient cloud updates:
+
+```
+UR7e Robot Controller
+      ↓ 100 Hz (/joint_states topic)
+      └─ Configured in ur_controllers.yaml
+      └─ state_publish_rate: 100.0
+      └─ action_monitor_rate: 20.0
+      
+MQTT Bridge (subscribes)
+      ↓ Receives: 100 Hz
+      ↓ 
+Rate Limiter (1.0 second threshold)
+      ↓ Filters: 99% of messages dropped
+      ↓ Publishes: 1 Hz
+      
+Cyberwave MQTT Broker
+      ↓ Receives: 1 Hz
+      
+Digital Twin Frontend
+      └─ Updates: 1 Hz (smooth visualization)
+```
+
+**Bandwidth Reduction:** 100 Hz → 1 Hz = **99% reduction** in network traffic!
+
+### Robot Publishing Frequencies
+
+**Configured in:** `src/Universal_Robots_ROS2_Driver/ur_robot_driver/config/ur_controllers.yaml`
+
+#### state_publish_rate: 100 Hz
+- **What it does**: Controls how often `/joint_states` topic is published
+- **Frequency**: 100 times per second (every 10 milliseconds)
+- **Why 100 Hz**: Provides smooth visualization and responsive control locally
+
+#### action_monitor_rate: 20 Hz  
+- **What it does**: Controls how often trajectory execution status is monitored
+- **Frequency**: 20 times per second (every 50 milliseconds)
+- **Why 20 Hz**: Sufficient for monitoring trajectory completion
+
+**Why these rates?** The 100 Hz rate is necessary for responsive local robot control and visualization, but **NOT necessary for cloud monitoring**. That's why we apply rate limiting.
+
+## Rate Limiting Configuration
+
+### Default: 1 Hz (1 second)
+
+The MQTT bridge limits upstream traffic to **1 Hz by default**, which is optimal for cloud monitoring because:
+
+1. **Human visualization**: Cannot perceive differences faster than ~10-20 Hz
+2. **Network efficiency**: 99% bandwidth reduction (100 Hz → 1 Hz)
+3. **Server load**: Reduces database writes and processing
+4. **Cost optimization**: Less data transfer = lower cloud costs
+5. **Battery/power**: Less transmission = longer operation on edge devices
+
+### Configurable Rate Limit
+
+You can adjust this rate based on your needs:
+
+```bash
+# More frequent updates (2 Hz = every 0.5 seconds)
+export MQTT_PUBLISH_RATE_LIMIT=0.5
+
+# Default: 1 Hz (every 1 second) - RECOMMENDED
+export MQTT_PUBLISH_RATE_LIMIT=1.0
+
+# Conservative (0.5 Hz = every 2 seconds)
+export MQTT_PUBLISH_RATE_LIMIT=2.0
+
+# Minimal (0.2 Hz = every 5 seconds)
+export MQTT_PUBLISH_RATE_LIMIT=5.0
+
+# Disable rate limiting (NOT recommended for cloud)
+export MQTT_PUBLISH_RATE_LIMIT=0
+```
+
+**Where to set:**
+- Environment variable: `MQTT_PUBLISH_RATE_LIMIT` (in `.env` file)
+- Config file: `src/mqtt_bridge/config/params.yaml`
+- Runtime: `ros2 param set /mqtt_bridge_node ros2mqtt_rate_limit 1.0`
+
+### Recommended Values by Use Case
+
+| Use Case | Rate Limit | Frequency | Reasoning |
+|----------|------------|-----------|-----------|
+| Production monitoring | 1.0s | 1 Hz | **Recommended** - Balanced |
+| Development/debugging | 0.5s | 2 Hz | More responsive |
+| Slow operations | 2.0s | 0.5 Hz | Maximum efficiency |
+| Demo/visualization | 0.5s | 2 Hz | Smoother updates |
+| Minimal bandwidth | 5.0s | 0.2 Hz | Extreme savings |
+
+## Configuration Files
+
+### MQTT Bridge Configuration
+
+**File:** `src/mqtt_bridge/config/params.yaml`
+
+```yaml
+/mqtt_bridge_node:
+  ros__parameters:
+    broker:
+      host: mqtt.cyberwave.com
+      port: 1883
+      username: "mqttcyb"
+      password: "mqttcyb231"
+      use_cyberwave: true
+    
+    # Robot Mapping (MANDATORY)
+    # Options: 'robot_arm_v1' or 'robot_ugv_beast_v1'
+    robot_id: 'robot_ugv_beast_v1'
+    
+    # Rate limiting
+    ros2mqtt_rate_limit: 1.0  # 1 Hz (1 second between publishes)
+    
+    bridge:
+      ros2mqtt:
+        ros_topics:
+          - /joint_states
+        topics:
+          /joint_states:
+            mqtt_topic: "cyberwave/joint/{twin_uuid}/update"
+            sdk_method: update_joint_state
+            type: sensor_msgs/JointState
+```
+
+### Robot Joint Mapping
+
+Robot mapping allows the bridge to correctly transform joint names and route commands.
+
+**1. Set Robot ID in `config/params.yaml`:**
+
+```yaml
+# Options: 'robot_arm_v1', 'robot_ugv_beast_v1', or 'default'
+robot_id: 'robot_ugv_beast_v1'
+```
+
+**2. Configure Mapping File:**
+
+Mapping files are located in `config/mappings/{robot_id}.yaml`. They define the `twin_uuid` and joint name transformations.
+
+**Example: `config/mappings/default.yaml`**
+```yaml
+version: 1
+robot_id: "default"
+format: "json_by_name"
+metadata:
+  twin_uuid: "00000000-0000-0000-0000-000000000000"
+
+joints: [] # No remapping by default
+
+capabilities:
+  upstream_mode: "joint"
+```
+
+**Example: `config/mappings/robot_arm_v1.yaml`**
+```yaml
+version: 1
+robot_id: "robot_arm_v1"
+format: "json_by_name"
+metadata:
+  twin_uuid: "your-twin-uuid-here"
+
+joints:
+  - ros_name: "shoulder_pan_joint"
+    mqtt_name: "shoulder_pan_joint"
+    transform: {scale: 1.0, offset: 0.0}
+  - ros_name: "ee_fixed_joint"
+    mqtt_name: "ee_fixed_joint"
+
+capabilities:
+  upstream_mode: "joint"
+
+# Robot-agnostic IO configuration
+io_configuration:
+  tool0:
+    enabled: true
+    joint_name: "ee_fixed_joint"
+    service_name: "/io_and_status_controller/set_io"
+```
+
+**Example: `config/mappings/robot_ugv_beast_v1.yaml`**
+```yaml
+version: 1
+robot_id: "robot_ugv_beast_v1"
+metadata:
+  twin_uuid: "your-twin-uuid-here"
+
+# Pluggable command registry
+command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.UGVBeastCommandRegistry"
+
+# Generic internal odometry
+internal_odometry:
+  enabled: true
+  track_width: 0.23
+  wheel_radius: 0.04
+  left_wheel_joints: ["left_up_wheel_link_joint", "left_down_wheel_link_joint"]
+  right_wheel_joints: ["right_up_wheel_link_joint", "right_down_wheel_link_joint"]
+
+# Camera streaming configuration
+camera:
+  format: "yuv420p"
+
+capabilities:
+  upstream_mode: "pose"
+```
+
+## Adding a New Robot from Scratch
+
+To integrate a new ROS 2 robot into the Cyberwave platform, follow these steps:
+
+### 1. Create a Mapping File
+Create a new YAML file in `config/mappings/your_robot_id.yaml`.
+
+```yaml
+version: 1
+robot_id: "your_robot_id"
+metadata:
+  twin_uuid: "GET-FROM-CYBERWAVE-DASHBOARD"
+
+# Define how ROS joints map to Digital Twin joints
+joints:
+  - ros_name: "base_to_arm_joint"
+    mqtt_name: "shoulder_joint"
+    transform: {scale: 1.0, offset: 0.0}
+
+capabilities:
+  upstream_mode: "joint" # "joint", "pose", or "both"
+```
+
+### 2. (Optional) Create a Command Handler
+If your robot has custom ROS services or actions (e.g., a gripper, a sprayer, or specialized LEDs), create a new plugin:
+1.  Create `mqtt_bridge/plugins/your_robot_handler.py`.
+2.  Inherit from `CommandRegistry` and implement your logic.
+3.  Register it in your mapping YAML:
+    ```yaml
+    command_registry: "mqtt_bridge.plugins.your_robot_handler.YourClassName"
+    ```
+
+### 3. (Optional) Enable Plugins
+*   **Internal Odometry**: If your robot doesn't publish `/odom`, enable the `internal_odometry` block in your YAML.
+*   **Navigation**: If using Nav2, ensure your robot has the standard Nav2 action servers running.
+*   **Camera**: Add a `camera` block to configure WebRTC streaming.
+
+### 4. Launch
+Run the bridge with your new `robot_id`:
+```bash
+ros2 run mqtt_bridge mqtt_bridge_node --ros-args -p robot_id:=your_robot_id
+```
+
+## Monitoring
+
+### Check Robot Publishing Rate
+
+```bash
+ros2 topic hz /joint_states
+```
+
+Expected: `average rate: 100.000`
+
+### Check Bridge Rate Limit
+
+```bash
+ros2 param get /mqtt_bridge_node ros2mqtt_rate_limit
+```
+
+Expected: `Double value is: 1.0`
+
+### Monitor MQTT Traffic
+
+```bash
+mosquitto_sub -h mqtt.cyberwave.com -t '#' -v | ts '[%H:%M:%S]'
+```
+
+Should see messages ~1 second apart (1 Hz)
+
+### Enable Debug Logging
+
+```bash
+ros2 launch mqtt_bridge mqtt_bridge.launch.py log_level:=debug
+```
+
+Look for rate limiting messages:
+```
+[DEBUG] Rate limit: Skipping ROS->MQTT publish for '/joint_states' 
+        (only 0.234s since last publish, limit is 1.000s)
+```
+
+## Performance Impact
+
+### Bandwidth Reduction
+
+| Stage | Frequency | Messages/sec | Bandwidth |
+|-------|-----------|--------------|-----------|
+| UR7e → ROS Topic | 100 Hz | 100 | ~50 KB/s |
+| MQTT Bridge (after filter) | 1 Hz | **1** | **~0.5 KB/s** |
+
+**Savings:** 99% reduction in network traffic
+
+### Cost Savings (Example)
+
+Assuming $0.10/GB data transfer:
+- **Without rate limiting**: $156/year per robot
+- **With 1 Hz rate limiting**: $1.56/year per robot
+- **Savings**: $154/year per robot (99% reduction)
+
+## Troubleshooting
+
+### Digital Twin Not Updating
+
+```bash
+# Check if rate limiting is too aggressive
+ros2 param get /mqtt_bridge_node ros2mqtt_rate_limit
+
+# Temporarily disable
+export MQTT_PUBLISH_RATE_LIMIT=0
+./launch_bridge_with_env.sh
+```
+
+### Too Much Network Traffic
+
+```bash
+# Increase rate limit interval
+export MQTT_PUBLISH_RATE_LIMIT=2.0  # 0.5 Hz
+./launch_bridge_with_env.sh
+```
+
+### Bridge Not Connecting
+
+```bash
+# Check credentials
+echo $CYBERWAVE_TOKEN
+
+# Check logs
+ros2 launch mqtt_bridge mqtt_bridge.launch.py log_level:=debug
+```
+
+## Testing
+
+### Test Rate Limiting
+
+```bash
+# Start bridge
+./launch_bridge_with_env.sh
+
+# In another terminal, run test script
+./test_rate_limiting.sh
+```
+
+### Manual Testing
+
+```bash
+# Publish test messages rapidly
+for i in {1..10}; do
+  ros2 topic pub --once /ping/ros std_msgs/msg/String "data: 'test $i'"
+  sleep 0.3
+done
+
+# Only ~3 messages should appear in MQTT (with 1 Hz rate limit)
+```
+
+## Architecture
+
+The bridge is designed to be fully general-purpose and robot-agnostic. All robot-specific behaviors are driven by the mapping `.yaml` file and pluggable modules.
+
+### Components
+
+1.  **Core Node (`mqtt_bridge_node.py`)**: Orchestrates MQTT connectivity and delegates logic to specialized modules.
+2.  **Telemetry (`telemetry.py`)**: Manages joint state accumulation and high-frequency feedback processing.
+3.  **Health (`health.py`)**: Handles periodic heartbeats and system status reporting.
+4.  **Plugins (`plugins/`)**:
+    *   **Command Registry**: Dynamically loaded logic for specialized hardware commands (e.g., `ugv_beast_command_handler.py`).
+    *   **Internal Odometry**: Dead-reckoning logic for robots without native odometry.
+    *   **Navigation Bridge**: Integration with the ROS 2 Navigation Stack (Nav2).
+    *   **ROS Camera**: WebRTC video streaming from ROS Image topics.
+5.  **Mapping System (`mapping.py`)**: Precomputes joint name transformations and coordinate transforms.
+6.  **Cyberwave Adapter**: SDK wrapper for cloud integration.
+
+### Robot-Agnostic Design
+
+#### 1. Dynamic Command Registry Loading
+The bridge does not hardcode command logic. Instead, the mapping file specifies a pluggable command registry class that is dynamically loaded.
+*   **Example (`robot_ugv_beast_v1.yaml`)**:
+    ```yaml
+    command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.UGVBeastCommandRegistry"
+    ```
+
+#### 2. Generic Internal Odometry
+Physical constants like wheel radius and track width are moved out of the code and into the mapping.
+*   **Example (`robot_ugv_beast_v1.yaml`)**:
+    ```yaml
+    internal_odometry:
+      enabled: true
+      track_width: 0.23
+      wheel_radius: 0.04
+      left_wheel_joints: ["left_up_wheel_link_joint", "left_down_wheel_link_joint"]
+      right_wheel_joints: ["right_up_wheel_link_joint", "right_down_wheel_link_joint"]
+    ```
+
+#### 3. Configurable IO and Tool Control
+The bridge supports a generic `io_configuration` system to manage robot tools (like grippers) with custom service types and activation thresholds.
+
+#### 4. Robot Specific Implementation Examples
+*   **UR7 / UR Robots**: Uses `robot_arm_v1.yaml` to toggle tools based on virtual joint positions.
+*   **UGV Beast**: Uses `robot_ugv_beast_v1.yaml` to enable internal odometry and load its specialized command registry for peripherals (LEDs, Pan-Tilt, etc.).
+*   **Future Robots**: New robots can be added by simply creating a mapping file and defining the appropriate registry, odometry, and IO configurations without modifying the bridge source code.
+
+### Message Flow
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                  MQTT BRIDGE ARCHITECTURE                   │
+└────────────────────────────────────────────────────────────┘
+
+ROS 2 Topics                 MQTT Bridge                MQTT Broker
+     │                            │                           │
+     │  /joint_states (100 Hz)    │                           │
+     ├───────────────────────────►│                           │
+     │                       ┌────▼─────┐                     │
+     │                       │  Rate    │                     │
+     │                       │  Limiter │                     │
+     │                       │  (1 Hz)  │                     │
+     │                       └────┬─────┘                     │
+     │                            │                           │
+     │                       ┌────▼─────┐                     │
+     │                       │ Cyberwave│                     │
+     │                       │ Adapter  │                     │
+     │                       └────┬─────┘                     │
+     │                            │   (1 Hz)                  │
+     │                            ├──────────────────────────►│
+     │                            │                           │
+     │  (downstream commands)     │                           │
+     │◄───────────────────────────┤                           │
+     │                            │◄──────────────────────────┤
+```
+
+## Documentation
+
+### Core Documentation
+- **[docs/COMMUNICATION_AND_SIGNALING.md](docs/COMMUNICATION_AND_SIGNALING.md)** - Critical architecture: WebRTC signaling, MQTT Client IDs, and Source Type enforcement.
+- **[WEBRTC_STREAMING.md](WEBRTC_STREAMING.md)** - Integrated ROS 2 WebRTC streaming
+- **[UPSTREAM_MESSAGE_FLOW.md](../../UPSTREAM_MESSAGE_FLOW.md)** - Complete upstream flow explanation
+- **[RATE_LIMITING.md](../../RATE_LIMITING.md)** - Detailed rate limiting documentation
+- **[RATE_LIMITING_QUICKSTART.md](../../RATE_LIMITING_QUICKSTART.md)** - Quick reference guide
+
+### Configuration
+- **[JOINT_STATES_RATE_CONFIG.md](../../JOINT_STATES_RATE_CONFIG.md)** - Robot rate configuration
+- **[SOURCE_TYPE_FILTERING.md](../../SOURCE_TYPE_FILTERING.md)** - Upstream vs downstream filtering
+
+### Implementation
+- **[RATE_LIMITING_IMPLEMENTATION.md](../../RATE_LIMITING_IMPLEMENTATION.md)** - Technical details
+- **[SDK_INTEGRATION_FIXED.md](../../SDK_INTEGRATION_FIXED.md)** - Cyberwave SDK integration
+
+## Key Points
+
+✅ **Robot publishes at 100 Hz** - necessary for local control and visualization
+
+✅ **Bridge filters to 1 Hz** - efficient for cloud monitoring
+
+✅ **Rate limit is configurable** - adjust via environment variable or config file
+
+✅ **99% bandwidth reduction** - massive cost savings
+
+✅ **1 Hz is optimal for cloud** - smooth enough for human monitoring
+
+✅ **No impact on local performance** - rate limiting only affects MQTT traffic
+
+## Support
+
+For issues or questions:
+1. Check the documentation files listed above
+2. Enable debug logging: `log_level:=debug`
+3. Review bridge logs for error messages
+4. Test with rate limiting disabled temporarily
+
+## License
+
+See workspace root for license information.

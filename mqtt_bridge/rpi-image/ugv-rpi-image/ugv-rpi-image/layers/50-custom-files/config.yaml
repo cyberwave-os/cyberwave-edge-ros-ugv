@@ -1,0 +1,142 @@
+name: "custom-ugv-files"
+description: "Custom UGV Beast configuration files, launch scripts, and MQTT Bridge"
+
+# Create necessary parent directories first
+commands:
+  - mkdir -p /home/ubuntu/ws/ugv_ws/src/ugv_main/ugv_bringup/launch
+  - mkdir -p /home/ubuntu/ws/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup
+  - mkdir -p /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/plugins
+
+# Copy custom files to specific locations
+files:
+  # =========================================
+  # UGV Beast Launch and Driver Files
+  # =========================================
+  
+  # UGV Beast master launch file
+  - src: files/ugv_beast/launch/master_beast.launch.py
+    dest: /home/ubuntu/ws/ugv_ws/src/ugv_main/ugv_bringup/launch/master_beast.launch.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  # UGV integrated driver Python module
+  - src: files/ugv_beast/ugv_bringup/ugv_integrated_driver.py
+    dest: /home/ubuntu/ws/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup/ugv_integrated_driver.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  # Package setup.py
+  - src: files/ugv_beast/setup.py
+    dest: /home/ubuntu/ws/ugv_ws/src/ugv_main/ugv_bringup/setup.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  # UGV services installation script
+  - src: files/ugv_beast/ugv_services_install.sh
+    dest: /home/ubuntu/ws/ugv_ws/ugv_services_install.sh
+    mode: "0755"
+    owner: ubuntu
+    group: ubuntu
+    
+  # Start UGV script
+  - src: files/ugv_beast/start_ugv.sh
+    dest: /home/ubuntu/ws/ugv_ws/start_ugv.sh
+    mode: "0755"
+    owner: ubuntu
+    group: ubuntu
+
+  # =========================================
+  # MQTT Bridge Package Files
+  # =========================================
+  
+  # Main MQTT Bridge Node
+  - src: files/mqtt_bridge/mqtt_bridge_node.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/mqtt_bridge_node.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  # Core MQTT Bridge Modules
+  - src: files/mqtt_bridge/cyberwave_mqtt_adapter.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/cyberwave_mqtt_adapter.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/command_handler.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/command_handler.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/health.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/health.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/logger_shim.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/logger_shim.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/mapping.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/mapping.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/telemetry.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/telemetry.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/__init__.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/__init__.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+  
+  # MQTT Bridge Plugins
+  - src: files/mqtt_bridge/plugins/__init__.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/plugins/__init__.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/plugins/internal_odometry.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/plugins/internal_odometry.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/plugins/navigation_bridge.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/plugins/navigation_bridge.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/plugins/ros_camera.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/plugins/ros_camera.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+    
+  - src: files/mqtt_bridge/plugins/ugv_beast_command_handler.py
+    dest: /home/ubuntu/ws/ugv_ws/src/mqtt_bridge/mqtt_bridge/plugins/ugv_beast_command_handler.py
+    mode: "0644"
+    owner: ubuntu
+    group: ubuntu
+
+# Rebuild affected packages with new files
+user_commands:
+  - cd /home/ubuntu/ws/ugv_ws
+  - source /opt/ros/jazzy/setup.bash
+  - source install/setup.bash || true
+  - colcon build --packages-select ugv_bringup mqtt_bridge --symlink-install
+  - chmod +x /home/ubuntu/ws/ugv_ws/*.sh

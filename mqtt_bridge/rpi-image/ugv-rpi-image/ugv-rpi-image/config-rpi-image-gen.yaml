@@ -1,0 +1,19 @@
+# UGV ROS 2 Raspberry Pi Image Configuration
+# This config uses rpi-image-gen's layer system
+
+device:
+  layer: pi4
+  hostname: ugv-robot
+  user1: ubuntu
+  user1pass: ubuntu
+
+image:
+  layer: image-rpios
+  boot_part_size: 512M
+  root_part_size: 14G
+  name: ugv-ros2-jazzy
+  compression: xz
+
+layer:
+  base: bookworm-base
+  custom: ugv-custom

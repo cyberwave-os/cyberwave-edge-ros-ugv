@@ -1,0 +1,160 @@
+/mqtt_bridge_node:
+  ros__parameters:
+    broker:
+      host: mqtt.cyberwave.com
+      port: 1883
+      username: "mqttcyb"
+      password: "mqttcyb231"
+      use_cyberwave: true # Enable Cyberwave SDK for upstream publishing
+      # Cyberwave API token - set via CYBERWAVE_TOKEN env var or uncomment below
+      cyberwave_token: "c6552d06-2529-4ce8-887e-c822a96f95e2"
+    # Optional topic prefix used when publishing to '{prefix}cyberwave/...'.
+    topic_prefix: "local" # for production set ""
+    image_topic: "/image_raw" # Topic to stream to WebRTC
+    prevent_duplicate_offers: true # Do not re-send offers while a connection is alive
+    # Camera config overrides for ugv_vision (usb_cam).
+    # These will be applied by ugv_vision/launch/camera.launch.py if present.
+    camera:
+      video_device: "/dev/video0"  # Primary USB camera endpoint
+      framerate: 15.0
+      io_method: "mmap"
+      frame_id: "pt_camera_link"
+      pixel_format: "yuyv"
+      # Auto-features - set to true if camera supports them, false otherwise
+      auto_white_balance: true
+      autoexposure: true
+      autofocus: false  # Most USB webcams don't have motorized autofocus - disable to prevent issues
+      # Common image sizes (WxH): 1920x1080, 1280x720, 1024x768, 800x600, 640x480, 320x240
+      image_width: 640
+      image_height: 480
+      camera_name: "pt_camera"
+      camera_info_url: "package://ugv_vision/config/camera_info.yaml"
+    # WebRTC auto-start configuration
+    webrtc:
+      auto_start: true
+      auto_start_delay_sec: 10.0 # Increased from 5.0 to allow hardware to settle
+      auto_start_retry_sec: 5.0
+      fps: 15.0
+      force_turn: true # Set to true to force all WebRTC traffic through TURN relay (bypasses NAT/firewall)
+
+    # Global kill-switch for all upstream MQTT traffic (ROS -> MQTT)
+    # If true, no telemetry, status, or health messages will be sent to the cloud.
+    disable_all_upstream: false
+
+    # Automatically reload mapping file when it changes on disk.
+    mapping_reload_on_change: true
+    # Rate limiting for upstream (ROS -> MQTT) publishing frequency
+    # Unit: Hz (messages per second)
+    # Default: 1.0 Hz. Set via MQTT_PUBLISH_RATE_LIMIT env var or here
+    # Set to 0 to disable rate limiting
+    ros2mqtt_rate_limit: 5.0 # Hz
+
+    # Disable upstream joint state updates from edge to cloud (FE/BE)
+    disable_edge_joint_updates: false
+
+    # specifies which robot mapping file to load from config/mappings/
+    # Options: 'robot_arm_v1' (UR robot), 'robot_ugv_beast_v1' (UGV Beast), 'default'
+    # The file loaded will be: {robot_id}.yaml
+    robot_id: "default"
+
+    navigation:
+      frame_id: map
+      source_type: edge
+      navigate_to_pose_action: navigate_to_pose
+      follow_path_action: follow_path
+      # Pose bridge for navigation feedback (use /odom or /amcl_pose)
+      # pose_topic: /odom
+      pose_topic_type: odom
+
+    bridge:
+      mqtt2ros:
+        # list of MQTT topics to bridge -> ros
+        mqtt_topics:
+          - cyberwave/joint/{twin_uuid}/update
+          - cyberwave/twin/{twin_uuid}/command
+        # topic-specific mappings (MQTT topic -> ROS topic(s))
+        topics:
+          # Subscribe to Cyberwave joint update topics for this specific twin
+          # The SDK publishes single-joint updates to: {prefix}cyberwave/joint/{twin_uuid}/update
+          # The {twin_uuid} placeholder will be replaced with the actual twin_uuid from the mapping file.
+          # which receives status updates and publishes them as Float64MultiArray.
+          cyberwave/joint/{twin_uuid}/update:
+            # ScaledJointTrajectoryController (for UR robot arms)
+            - ros_topic: /scaled_joint_trajectory_controller/joint_trajectory
+              sdk_method: subscribe_twin_joint_states
+              type: trajectory_msgs/JointTrajectory
+            # UGV Beast joint states (for wheel + pan-tilt control)
+            - ros_topic: /ugv/joint_states
+              sdk_method: subscribe_twin_joint_states
+              type: sensor_msgs/JointState
+            # Mujoco simulation
+            - ros_topic: /mujoco/joint_commands
+              sdk_method: subscribe_twin_joint_states
+              type: std_msgs/Float64MultiArray
+          # Command router topic - receives commands and routes to appropriate ROS topics
+          # Commands are parsed by the bridge and routed based on command type
+          # Format: {"command": "cmd_vel", "data": {...}} or {"command": "gripper", "data": {...}}
+          # The bridge will dynamically publish to the appropriate ROS topic based on command type
+          # This topic is handled specially by the CommandRegistry - no direct ROS mapping needed
+          # Supported commands: cmd_vel, led_ctrl, pan_tilt, gripper, estop
+          # Supported commands: cmd_vel, led_ctrl, pan_tilt, gripper, estop
+
+      ros2mqtt:
+        # list of ROS topics to bridge -> MQTT
+        ros_topics:
+          - /ping/ros
+          - /ugv/joint_states
+          - /joint_states
+          - /ugv/imu
+          - /ugv/battery_status
+          - /voltage
+          # - /odom
+          - /cmd_vel
+          - /ugv/led_ctrl
+          - /ugv/oled_ctrl
+          - /scaled_joint_trajectory_controller/joint_trajectory
+          - /mujoco/joint_states
+        # topic-specific mappings (ROS topic -> MQTT topic)
+        topics:
+          /ping/ros:
+            mqtt_topic: /ping
+          /ugv/joint_states:
+            mqtt_topic: "cyberwave/joint/{twin_uuid}/update"
+            sdk_method: update_joint_state
+            type: sensor_msgs/JointState
+            rate: 5.0 # Higher rate for smooth servo feedback
+          /joint_states:
+            mqtt_topic: "cyberwave/joint/{twin_uuid}/update"
+            sdk_method: update_joint_state
+            type: sensor_msgs/JointState
+            rate: 5.0 # Higher rate for smooth servo feedback
+          /ugv/imu:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/imu"
+            type: sensor_msgs/Imu
+          /ugv/battery_status:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/battery"
+            type: sensor_msgs/BatteryState
+            interval: 60.0 # Once every one minute
+          /voltage:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/battery"
+            type: std_msgs/Float32
+            interval: 60.0 # Once every one minute
+          # /odom:
+          #   mqtt_topic: "cyberwave/pose/{twin_uuid}/update"
+          #   type: nav_msgs/Odometry
+          /cmd_vel:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/cmd_vel"
+            type: geometry_msgs/Twist
+          /ugv/led_ctrl:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/led_ctrl"
+            type: std_msgs/Float32MultiArray
+          /ugv/oled_ctrl:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/oled_ctrl"
+            type: std_msgs/String
+          /scaled_joint_trajectory_controller/joint_trajectory:
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/trajectory"
+            type: trajectory_msgs/JointTrajectory
+          /mujoco/joint_states:
+            mqtt_topic: "cyberwave/joint/{twin_uuid}/update"
+            sdk_method: update_joint_state
+            type: sensor_msgs/JointState

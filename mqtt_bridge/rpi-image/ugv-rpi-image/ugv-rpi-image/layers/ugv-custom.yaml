@@ -1,0 +1,103 @@
+# METABEGIN
+# X-Env-Layer-Name: ugv-custom
+# X-Env-Layer-Category: application
+# X-Env-Layer-Desc: UGV ROS 2 Jazzy workspace with MQTT Bridge
+# X-Env-Layer-Version: 1.0.0
+# METAEND
+---
+mmdebstrap:
+  packages:
+    # Basic development tools
+    - git
+    - wget
+    - curl
+    - build-essential
+    - cmake
+    - python3-pip
+    - python3-venv
+    
+    # ROS 2 dependencies (we'll install ROS 2 in hooks)
+    - software-properties-common
+    - locales
+    - curl
+    - gnupg
+    - lsb-release
+    
+    # Serial and hardware access
+    - python3-serial
+    - udev
+    
+    # MQTT
+    - mosquitto
+    - mosquitto-clients
+    - python3-paho-mqtt
+    
+    # Docker
+    - docker.io
+    - docker-compose
+    
+    # Utilities
+    - tmux
+    - htop
+    - vim
+    - net-tools
+    - rsync
+  
+  customize-hooks:
+    # Install ROS 2 Jazzy
+    - |
+      #!/bin/bash
+      set -e
+      
+      echo "Installing ROS 2 Jazzy..."
+      
+      # Add ROS 2 repository
+      chroot $1 bash -c '
+        apt update
+        apt install -y software-properties-common curl gnupg lsb-release
+        curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+        
+        apt update
+        apt install -y ros-jazzy-ros-base ros-jazzy-ros-core python3-colcon-common-extensions
+      '
+      
+      echo "ROS 2 Jazzy installed successfully"
+    
+    # Create workspace structure
+    - |
+      #!/bin/bash
+      set -e
+      
+      echo "Creating UGV workspace structure..."
+      
+      chroot $1 bash -c '
+        mkdir -p /home/ubuntu/ws/ugv_ws/src
+        chown -R ubuntu:ubuntu /home/ubuntu/ws
+      '
+    
+    # Configure user groups
+    - |
+      #!/bin/bash
+      set -e
+      
+      echo "Adding ubuntu user to groups..."
+      
+      chroot $1 bash -c '
+        usermod -aG dialout,docker,gpio,i2c,spi,audio,video,plugdev ubuntu || true
+      '
+    
+    # Setup ROS environment in bashrc
+    - |
+      #!/bin/bash
+      set -e
+      
+      echo "Configuring ROS 2 environment..."
+      
+      chroot $1 bash -c '
+        echo "source /opt/ros/jazzy/setup.bash" >> /home/ubuntu/.bashrc
+        echo "export UGV_MODEL=ugv_beast" >> /home/ubuntu/.bashrc
+        echo "if [ -f /home/ubuntu/ws/ugv_ws/install/setup.bash ]; then" >> /home/ubuntu/.bashrc
+        echo "  source /home/ubuntu/ws/ugv_ws/install/setup.bash" >> /home/ubuntu/.bashrc
+        echo "fi" >> /home/ubuntu/.bashrc
+      '

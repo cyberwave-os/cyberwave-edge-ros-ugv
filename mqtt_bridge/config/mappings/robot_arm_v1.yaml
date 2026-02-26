@@ -1,0 +1,101 @@
+version: 1
+robot_id: "robot_arm_v1"
+format: "json_by_name"
+metadata:
+  author: "Cyberwave"
+  created: "2025-11-19"
+  notes: "Example mapping for a 6-DOF manipulator (UR5 to UR5)."
+  # UUID of the digital twin resource on the Cyberwave backend.
+  twin_uuid: "00000000-0000-0000-0000-000000000000"
+
+joints:
+  - ros_name: "shoulder_pan_joint"
+    mqtt_name: "shoulder_pan_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert:  false
+  - ros_name: "shoulder_lift_joint"
+    mqtt_name: "shoulder_lift_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert: false
+  - ros_name: "elbow_joint"
+    mqtt_name: "elbow_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert: false
+  - ros_name: "wrist_1_joint"
+    mqtt_name: "wrist_1_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert: false
+  - ros_name: "wrist_2_joint"
+    mqtt_name: "wrist_2_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert: false
+  - ros_name: "wrist_3_joint"
+    mqtt_name: "wrist_3_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert: false
+  - ros_name: "ee_fixed_joint"
+    mqtt_name: "ee_fixed_joint"
+    transform:
+      scale: 1.0
+      offset: 0.0
+      invert: false
+
+capabilities:
+  supports_atomic_pose: false
+  # Determines which upstream telemetry topics to publish
+  # Options: 'joint', 'pose', or 'both'
+  upstream_mode: "joint"
+  upstream_topics:
+    - joint  # {prefix}cyberwave/joint/{twin_uuid}/update
+
+# IO / Tool Configuration for UR robots
+io_configuration:
+  tool0:
+    enabled: true
+    joint_name: "ee_fixed_joint"
+    service_name: "/io_and_status_controller/set_io"
+    service_type: "ur_msgs/srv/SetIO"
+    on_threshold: 0.0
+    off_value: 0.0
+    on_value: 1.0
+
+# Robot motion constants for safe trajectory generation
+robot_constants:
+  # Maximum joint velocities (rad/s) 
+  max_velocities:
+    shoulder_pan_joint: 2.0 
+    shoulder_lift_joint: 2.0
+    elbow_joint: 2.0
+    wrist_1_joint: 2.0
+    wrist_2_joint: 2.0
+    wrist_3_joint: 2.0
+    default: 2.0 
+  
+  # Maximum joint accelerations (rad/s²)
+  max_accelerations:
+    shoulder_pan_joint: 5.0  # Increased from 3.0
+    shoulder_lift_joint: 5.0
+    elbow_joint: 5.0
+    wrist_1_joint: 5.0
+    wrist_2_joint: 5.0
+    wrist_3_joint: 5.0
+    default: 5.0
+  
+  # Minimum trajectory time (seconds) - reduced for faster response
+  min_trajectory_time: 0.3  # Decreased from 0.5
+  
+  # Safety factor to multiply calculated time (reduced for faster motion)
+  time_safety_factor: 1.5  # Decreased from 2.0
+  

@@ -1,0 +1,38 @@
+# Git & IDE
+.git/
+.github/
+.vscode/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!mqtt_bridge/scripts/ugv_beast/ugv_bringup/README.md
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Build artefacts
+build/
+dist/
+install/
+log/
+
+# Docker build configs (avoid recursive copy)
+mqtt_bridge/docker-conf/
+mqtt_bridge/docs/
+mqtt_bridge/rpi-image/
+
+# Dev-only files
+requirements-dev.txt
+tests/

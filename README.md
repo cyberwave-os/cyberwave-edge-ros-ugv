@@ -352,40 +352,47 @@ capabilities:
 
 ## Running Tests
 
-The project includes a comprehensive test suite to ensure reliability and correctness.
+### Docker Smoke Test (Hardware-in-the-Loop)
 
-### Install Test Dependencies
+The smoke test verifies the full ROS 2 graph starts correctly inside the Docker
+image by emulating the UGV Beast's ESP32 slave controller over a virtual serial
+port.  This catches launch file errors, missing packages, serial protocol
+regressions, and topic wiring issues **before** deploying to the physical robot.
+
+**What it does:**
+
+1. Creates a virtual serial port pair with `socat`
+2. Runs `mock_esp32.py` — a Python emulator that speaks the same JSON-over-UART
+   protocol as the real ESP32 (velocity, servo, LED commands in; T:1001
+   telemetry at 20 Hz out)
+3. Launches `master_beast.launch.py` with camera and LiDAR disabled
+4. Verifies expected ROS nodes come up (`ugv_bringup`, `mqtt_bridge_node`,
+   `robot_state_publisher`, `base_node`)
+5. Verifies expected topics exist and are publishing (`/imu/data_raw`,
+   `/odom/odom_raw`, `/voltage`, `/cmd_vel`, `/ugv/joint_states`)
+6. Sends a test `cmd_vel` and confirms it reaches the mock
+
+**Run locally (requires Docker):**
 
 ```bash
-# Install the package with development dependencies
+# 1. Build the image
+docker build -t ugv-test .
+
+# 2. Run the smoke test (mounts tests/ into the container)
+docker run --rm --privileged \
+  -v "$(pwd)/tests:/home/ws/tests" \
+  ugv-test \
+  bash /home/ws/tests/smoke_test.sh
+```
+
+The test exits `0` on success and `1` on failure with a summary of what went
+wrong.
+
+### Unit Tests
+
+```bash
 pip install -r requirements-dev.txt
-```
-
-### Run Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run tests with coverage report
-pytest --cov=mqtt_bridge --cov-report=html
-
-# Run tests with verbose output
 pytest -v
-
-# Run specific test file
-pytest tests/test_bridge.py
-```
-
-### Test Coverage
-
-After running tests with coverage, you can view the report:
-
-```bash
-# Generate and open coverage report
-pytest --cov=mqtt_bridge --cov-report=html
-open htmlcov/index.html  # macOS
-# xdg-open htmlcov/index.html  # Linux
 ```
 
 ## Monitoring

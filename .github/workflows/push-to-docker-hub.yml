@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_IMAGE: cyberwaveos/edge-ros-ugv
+  DOCKER_IMAGE: cyberwaveos/ugv-driver
 
 jobs:
   build-and-push:

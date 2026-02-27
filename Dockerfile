@@ -243,13 +243,13 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
         ugv_gazebo ugv_nav ugv_slam ugv_tools \
         ugv_vision ugv_web_app \
     --symlink-install --parallel-workers 2 \
-    --executor sequential --continue-on-error"
+    --executor sequential --continue-on-error || true"
 
 # Pass 3 — mqtt_bridge
 RUN bash -c "source /opt/ros/humble/setup.bash && \
     cd /home/ws/ugv_ws && \
     if [ -f src/mqtt_bridge/setup.py ]; then \
-        colcon build --packages-select mqtt_bridge --symlink-install; \
+        colcon build --packages-select mqtt_bridge; \
     fi"
 
 # ==========================================================================

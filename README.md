@@ -97,9 +97,45 @@ That's it! Your ROS 2 robot should now be connected to Cyberwave.
 
 ## Installation
 
-### 1. Development Installation
+### 1. Docker (recommended)
 
-For testing and development:
+The Docker image bundles ROS 2 Humble, the UGV Beast workspace, and the MQTT bridge.
+
+```bash
+# Build the image (~7 GB, first build takes 10-15 min)
+docker build -t cyberwaveos/edge-ros-ugv:latest .
+
+# Run with full hardware access (serial, camera, audio)
+docker run -dit \
+  --name ugv_beast \
+  --privileged \
+  --net=host \
+  -v /dev:/dev \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -e DISPLAY="${DISPLAY}" \
+  cyberwaveos/edge-ros-ugv:latest
+
+# SSH into the container (password: ws)
+ssh root@localhost -p 23
+
+# Inside the container — start everything
+./start_ugv.sh
+```
+
+To run only the MQTT bridge (no UGV hardware):
+
+```bash
+docker run -dit --name mqtt_bridge --net=host \
+  cyberwaveos/edge-ros-ugv:latest \
+  bash -c "source /opt/ros/humble/setup.bash && \
+           source /home/ws/ugv_ws/install/setup.bash && \
+           ros2 run mqtt_bridge mqtt_bridge_node \
+             --ros-args -p robot_id:=robot_ugv_beast_v1"
+```
+
+### 2. Development Installation (no Docker)
+
+For testing and development directly on the host:
 
 ```bash
 # Clone the repository
@@ -122,7 +158,7 @@ cp .env.example .env
 nano .env
 ```
 
-### 2. Production Installation (Ubuntu/Linux)
+### 3. Production Installation (Ubuntu/Linux, systemd)
 
 For production deployment as a systemd service:
 

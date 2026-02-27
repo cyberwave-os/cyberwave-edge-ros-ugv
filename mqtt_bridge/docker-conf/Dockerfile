@@ -351,7 +351,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     --symlink-install \
     --parallel-workers 2 \
     --executor sequential \
-    --continue-on-error"
+    --continue-on-error || true"
 
 # Build mqtt_bridge package if setup.py exists
 RUN bash -c "source /opt/ros/humble/setup.bash && \

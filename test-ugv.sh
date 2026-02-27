@@ -90,6 +90,8 @@ echo "=========================================="
 
 docker run --rm --privileged \
     -v "$SCRIPT_DIR/tests:/home/ws/tests" \
+    -e CYBERWAVE_API_KEY=smoke-test-token \
+    -e CYBERWAVE_TWIN_UUID=00000000-0000-0000-0000-smoke-test \
     "$IMAGE_NAME" \
     bash /home/ws/tests/smoke_test.sh
 

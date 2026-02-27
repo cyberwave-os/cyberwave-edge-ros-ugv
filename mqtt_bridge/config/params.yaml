@@ -1,15 +1,15 @@
 /mqtt_bridge_node:
   ros__parameters:
     broker:
-      host: mqtt.cyberwave.com
+      host: "" # Set via CYBERWAVE_MQTT_HOST env var (edge core provides this)
       port: 1883
       username: "mqttcyb"
       password: "mqttcyb231"
       use_cyberwave: true # Enable Cyberwave SDK for upstream publishing
-      # Cyberwave API token - set via CYBERWAVE_TOKEN env var or uncomment below
-      cyberwave_token: "c6552d06-2529-4ce8-887e-c822a96f95e2"
-    # Optional topic prefix used when publishing to '{prefix}cyberwave/...'.
-    topic_prefix: "local" # for production set ""
+      # Cyberwave API token — set via CYBERWAVE_TOKEN / CYBERWAVE_API_KEY env var
+      cyberwave_token: ""
+    # Topic prefix: set via CYBERWAVE_ENVIRONMENT env var (empty = production)
+    topic_prefix: ""
     image_topic: "/image_raw" # Topic to stream to WebRTC
     prevent_duplicate_offers: true # Do not re-send offers while a connection is alive
     # Camera config overrides for ugv_vision (usb_cam).

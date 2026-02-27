@@ -110,7 +110,8 @@ set -u
 
 export ROS_DOMAIN_ID=99  # isolated domain for testing
 export ROS_LOCALHOST_ONLY=1
-export CYBERWAVE_TOKEN="${CYBERWAVE_TOKEN:-smoke-test-token}"
+# Support both old (CYBERWAVE_TOKEN) and new (CYBERWAVE_API_KEY) env var names
+export CYBERWAVE_TOKEN="${CYBERWAVE_TOKEN:-${CYBERWAVE_API_KEY:-smoke-test-token}}"
 
 # ---------- 4. Launch the ROS graph ----------
 

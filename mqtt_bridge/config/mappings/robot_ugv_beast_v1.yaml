@@ -5,8 +5,8 @@ metadata:
   author: "Cyberwave"
   created: "2025-12-17"
   notes: "Mapping for UGV Beast - Wheels, Pan-Tilt, and Fixed joints"
-  # UUID of the digital twin resource on the Cyberwave backend.
-  twin_uuid: "b84abfbc-a8ba-4992-9b69-08445cefc6d2"
+  # UUID of the digital twin. Override via CYBERWAVE_TWIN_UUID env var (set by edge core).
+  twin_uuid: "00000000-0000-0000-0000-000000000000"
 
 joints:
   # Wheel joints (continuous rotation)

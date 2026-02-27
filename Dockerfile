@@ -295,8 +295,9 @@ WORKDIR /home/ws/ugv_ws
 
 EXPOSE 23 11311 11345
 
-RUN printf '#!/bin/bash\nservice ssh start\nexec "$@"\n' > /ssh_entrypoint.sh && \
-    chmod +x /ssh_entrypoint.sh
+# Cyberwave driver entrypoint: reads twin JSON, maps env vars, starts SSH
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/ssh_entrypoint.sh"]
-CMD ["/bin/bash"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/home/ws/ugv_ws/start_ugv.sh"]

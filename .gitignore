@@ -65,8 +65,9 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
-# ROS specific
+# ROS specific (dynamic_reconfigure, etc.) — but keep setup.cfg for ament_python
 *.cfg
+!setup.cfg
 *.user
 *.autosave
 *.log

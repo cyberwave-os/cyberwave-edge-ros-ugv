@@ -24,20 +24,48 @@ from importlib.metadata import version, PackageNotFoundError
 # lower-level `CyberwaveMQTTClient` implementation. If the SDK isn't
 # available the adapter should raise early so callers can fall back.
 try:
-    from cyberwave import Cyberwave, SOURCE_TYPE_EDGE, SOURCE_TYPE_TELE, SOURCE_TYPE_EDIT, SOURCE_TYPE_SIM  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+    from cyberwave import Cyberwave
+    # Import source types with fallbacks for SDK version compatibility
+    try:
+        from cyberwave import SOURCE_TYPE_EDGE
+    except ImportError:
+        SOURCE_TYPE_EDGE = "edge"
+    try:
+        from cyberwave import SOURCE_TYPE_TELE
+    except ImportError:
+        SOURCE_TYPE_TELE = "tele"
+    try:
+        from cyberwave import SOURCE_TYPE_EDIT
+    except ImportError:
+        SOURCE_TYPE_EDIT = "edit"
+    try:
+        from cyberwave import SOURCE_TYPE_SIM
+    except ImportError:
+        SOURCE_TYPE_SIM = "sim"
+    # These may not exist in older SDK versions (< 0.3.24)
+    try:
+        from cyberwave import SOURCE_TYPE_EDGE_LEADER
+    except ImportError:
+        SOURCE_TYPE_EDGE_LEADER = "edge_leader"
+    try:
+        from cyberwave import SOURCE_TYPE_EDGE_FOLLOWER
+    except ImportError:
+        SOURCE_TYPE_EDGE_FOLLOWER = "edge_follower"
+except ImportError:  # pragma: no cover - optional dependency
     Cyberwave = None  # type: ignore
-    SOURCE_TYPE_EDGE = "edge"  # Fallback
+    SOURCE_TYPE_EDGE = "edge"
     SOURCE_TYPE_TELE = "tele"
     SOURCE_TYPE_EDIT = "edit"
     SOURCE_TYPE_SIM = "sim"
+    SOURCE_TYPE_EDGE_LEADER = "edge_leader"
+    SOURCE_TYPE_EDGE_FOLLOWER = "edge_follower"
 
 
 class CyberwaveAdapter:
     def __init__(
         self,
         broker: str = "mqtt.cyberwave.com",
-        port: int = 1883,
+        port: int = 8883,  # TLS auto-enabled for port 8883
         api_token: Optional[str] = None,
         topic_prefix: str = "",
         auto_connect: bool = True,
@@ -84,8 +112,18 @@ class CyberwaveAdapter:
                     "or export CYBERWAVE_TOKEN environment variable."
                 )
             
-            self._logger.debug(f"Initializing Cyberwave client for broker {broker}:{port}")
-            cw = Cyberwave(token=api_token, mqtt_host=broker, mqtt_port=port)
+            self._logger.info(f"Initializing Cyberwave client for broker {broker}:{port}")
+            self._logger.info(f"Using topic_prefix: '{topic_prefix or ''}'")
+            
+            # Initialize the Cyberwave SDK client with topic_prefix
+            cw = Cyberwave(
+                token=api_token, 
+                mqtt_host=broker, 
+                mqtt_port=port,
+                topic_prefix=topic_prefix or ""
+            )
+            
+            self._logger.info(f"Cyberwave client initialized successfully")
 
             # store factory instance for passthroughs and keep topic prefix
             self._cw = cw
@@ -96,9 +134,25 @@ class CyberwaveAdapter:
             # its own connection lifecycle.
             try:
                 if hasattr(cw, 'mqtt') and callable(getattr(cw.mqtt, 'connect', None)):
+                    self._logger.info("Calling cw.mqtt.connect()...")
                     cw.mqtt.connect()
+                    self._logger.info("cw.mqtt.connect() completed")
+                    
+                    # Wait for connection to establish (up to 5 seconds)
+                    self._logger.info("Waiting for MQTT connection to establish...")
+                    for i in range(50):  # 50 * 0.1s = 5 seconds max
+                        if hasattr(cw.mqtt, '_client') and hasattr(cw.mqtt._client, 'connected'):
+                            if cw.mqtt._client.connected:
+                                self._logger.info(f"MQTT connection established after {i * 0.1:.1f}s")
+                                break
+                        time.sleep(0.1)
+                    else:
+                        self._logger.warning("MQTT connection not established after 5 seconds")
+                    
                 elif hasattr(cw, 'connect') and callable(getattr(cw, 'connect', None)):
+                    self._logger.info("Calling cw.connect()...")
                     cw.connect()
+                    self._logger.info("cw.connect() completed")
             except Exception:
                 self._logger.debug('Cyberwave factory connect() raised during init')
 
@@ -145,6 +199,10 @@ class CyberwaveAdapter:
                     core_client = client_obj
 
             self._mqtt_client = core_client
+            
+            # Store reference to the SDK's high-level mqtt object for direct use
+            # by components that need SDK-native methods (like BaseVideoStreamer)
+            self._sdk_mqtt = getattr(cw, 'mqtt', None)
 
             # pending subscriptions queued while client is not connected
             self._pending_subs = []  # list of (topic, handler, qos)
@@ -188,6 +246,25 @@ class CyberwaveAdapter:
             if isinstance(v, bool):
                 return v
         return False
+
+    @property
+    def sdk_mqtt(self):
+        """Return the SDK's native MQTT client object.
+        
+        This provides direct access to the Cyberwave SDK's mqtt interface,
+        which has specialized methods like publish_webrtc_message(), 
+        subscribe_webrtc_messages(), etc. Use this for components that need
+        SDK-native functionality (e.g., BaseVideoStreamer).
+        """
+        return getattr(self, '_sdk_mqtt', None)
+    
+    @property
+    def cyberwave_factory(self):
+        """Return the Cyberwave SDK factory instance.
+        
+        This provides access to cw.twin(), cw.video_stream(), etc.
+        """
+        return getattr(self, '_cw', None)
 
     def _discover_core_client(self, client_obj: Any) -> Any:
         """Find a concrete MQTT client under a factory wrapper.
@@ -322,7 +399,7 @@ class CyberwaveAdapter:
             self._logger.exception("CyberwaveAdapter.publish failed: %s", e)
             raise
 
-    def subscribe(self, topic: str, on_message: Optional[Callable] = None, qos: int = 0) -> Any:
+    def subscribe(self, topic: str, on_message: Optional[Callable] = None, qos: int = 1) -> Any:
         """Subscribe and translate SDK handler signature into node callback.
 
         The SDK will call handlers with `data` (already JSON-decoded or string).

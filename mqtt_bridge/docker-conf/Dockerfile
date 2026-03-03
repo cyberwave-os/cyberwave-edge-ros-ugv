@@ -155,7 +155,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python packages
 RUN pip3 install --no-cache-dir \
-    cyberwave==0.3.3 \
+    cyberwave==0.3.24 \
     pydantic==2.12.5 \
     pyserial==3.5 \
     paho-mqtt==2.1.0 \

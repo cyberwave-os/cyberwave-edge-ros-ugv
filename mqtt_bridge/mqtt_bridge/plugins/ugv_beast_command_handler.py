@@ -344,7 +344,7 @@ class GenericActuationHandler(CommandHandler):
         
         # ============= VIDEO STREAM ACTUATIONS =============
         elif actuation == "start_video":
-            # Start camera WebRTC streaming
+            # Start camera WebRTC streaming using SDK Twin API
             try:
                 if hasattr(self.node, 'start_camera_stream'):
                     # Extract recording preference from data if provided
@@ -368,7 +368,7 @@ class GenericActuationHandler(CommandHandler):
                 return False
         
         elif actuation == "stop_video":
-            # Stop camera WebRTC streaming
+            # Stop camera WebRTC streaming using SDK Twin API
             try:
                 if hasattr(self.node, 'stop_camera_stream'):
                     self.logger.info("Stopping video stream")
@@ -1168,7 +1168,7 @@ class TakePhotoHandler(CommandHandler):
             if hasattr(self.node, '_mapping') and self.node._mapping:
                 twin_uuid = getattr(self.node._mapping, 'twin_uuid', None)
             
-            if twin_uuid and self._mqtt_adapter:
+            if twin_uuid:
                 prefix = getattr(self.node, 'ros_prefix', '')
                 
                 # Publish the captured image to a dedicated photo topic
@@ -1181,7 +1181,9 @@ class TakePhotoHandler(CommandHandler):
                     "width": frame.shape[1],
                     "height": frame.shape[0]
                 }
-                self._mqtt_adapter.publish(photo_topic, photo_payload)
+                # Use node.publish() which properly serializes dict to JSON
+                # and handles both CyberwaveAdapter and paho-mqtt fallback
+                self.node.publish(photo_topic, photo_payload)
                 self.logger.info(f"Published photo to {photo_topic} ({len(image_base64)} bytes)")
             
             # Send success response

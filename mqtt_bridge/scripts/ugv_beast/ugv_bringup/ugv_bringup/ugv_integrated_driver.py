@@ -173,7 +173,7 @@ class ugv_bringup_node(Node):
     # Main loop for reading sensor feedback and publishing it to ROS topics
     def feedback_loop(self):
         data = self.base_controller.feedback_data()
-        if data and data.get("T") == 1001:
+        if data and isinstance(data, dict) and data.get("T") == 1001:
             self.publish_imu_data_raw()
             self.publish_imu_mag()
             self.publish_odom_raw()

@@ -121,7 +121,8 @@ class MQTTBridgeNode(Node):
         # default (empty string) so callers can still override via params or
         # environment variables without triggering deprecation warnings.
         self.declare_parameter('broker.host', mqtt_broker_env if mqtt_broker_env is not None else '')
-        self.declare_parameter('broker.port', 1883)
+        self.declare_parameter('broker.port', 8883)  # TLS auto-enabled for port 8883
+        self.declare_parameter('broker.use_paho_direct', False)
         self.declare_parameter('broker.username', '')
         self.declare_parameter('broker.password', '')
         self.declare_parameter('broker.cyberwave_token', '')
@@ -190,6 +191,10 @@ class MQTTBridgeNode(Node):
         # Global kill-switch for all upstream MQTT traffic (ROS -> MQTT)
         self.declare_parameter('disable_all_upstream', False)
         self._disable_all_upstream = self.get_parameter('disable_all_upstream').value
+        
+        # MQTT QoS for command subscriptions (default: 1 for reliability with low latency)
+        self.declare_parameter('mqtt_command_qos', 1)
+        self._mqtt_command_qos = self.get_parameter('mqtt_command_qos').value
 
         # try reading the simple scalar broker params
         host_param = self.get_parameter('broker.host').value
@@ -198,9 +203,9 @@ class MQTTBridgeNode(Node):
         password_param = self.get_parameter('broker.password').value
         host = host_param or 'localhost'
         try:
-            port = int(port_param) if port_param is not None else 1883
+            port = int(port_param) if port_param is not None else 8883
         except Exception:
-            port = 1883
+            port = 8883
         
         # Store broker credentials
         username = username_param if username_param else None
@@ -384,7 +389,13 @@ class MQTTBridgeNode(Node):
         # Optionally use the Cyberwave SDK adapter if available and requested
         self.declare_parameter('broker.use_cyberwave', True)
         use_cw = self.get_parameter('broker.use_cyberwave').value
-        self.declare_parameter('image_topic', '/image_raw')
+        
+        # Check if direct paho-mqtt connection is requested (bypasses Cyberwave SDK)
+        use_paho_direct = self.get_parameter('broker.use_paho_direct').value
+        if use_paho_direct:
+            self.get_logger().warning("use_paho_direct=True: Forcing paho-mqtt direct connection (bypassing Cyberwave SDK)")
+            use_cw = False
+        # Note: image_topic is now in the robot mapping file under camera.image_topic
         self.declare_parameter('webrtc.auto_start', False)
         self.declare_parameter('webrtc.auto_start_delay_sec', 10.0)
         self.declare_parameter('webrtc.auto_start_retry_sec', 5.0)
@@ -407,6 +418,12 @@ class MQTTBridgeNode(Node):
                 else:
                     chosen_prefix = "" if param_prefix == "production" else param_prefix
 
+                # Normalize prefix: strip whitespace, ensure trailing '/' if non-empty
+                # SDK concatenates: f"{prefix}cyberwave/..." so prefix needs trailing slash
+                chosen_prefix = chosen_prefix.strip() if chosen_prefix else ""
+                if chosen_prefix and not chosen_prefix.endswith('/'):
+                    chosen_prefix = f"{chosen_prefix}/"
+                
                 self.topic_prefix = chosen_prefix
                 self.ros_prefix = self.topic_prefix
             except Exception:
@@ -449,9 +466,17 @@ class MQTTBridgeNode(Node):
                 param_prefix = self.get_parameter('topic_prefix').value
                 
                 if env_env is not None:
-                    self.topic_prefix = "" if env_env == "production" else env_env
+                    chosen_prefix = "" if env_env == "production" else env_env
                 else:
-                    self.topic_prefix = "" if param_prefix == "production" else param_prefix
+                    chosen_prefix = "" if param_prefix == "production" else param_prefix
+                
+                # Normalize prefix: strip whitespace, ensure trailing '/' if non-empty
+                # SDK concatenates: f"{prefix}cyberwave/..." so prefix needs trailing slash
+                chosen_prefix = chosen_prefix.strip() if chosen_prefix else ""
+                if chosen_prefix and not chosen_prefix.endswith('/'):
+                    chosen_prefix = f"{chosen_prefix}/"
+                    
+                self.topic_prefix = chosen_prefix
                 self.ros_prefix = self.topic_prefix
                 
                 self.get_logger().info(f"Topic prefix set to: '{self.topic_prefix}'")
@@ -508,18 +533,48 @@ class MQTTBridgeNode(Node):
                 if force_turn:
                     self.get_logger().info("WebRTC force_turn ENABLED - all media will be relayed through TURN server")
                 
-                self._ros_streamer = ROSCameraStreamer(
-                    node=self,
-                    force_relay=force_turn,
-                    client=self._mqtt_adapter or self, 
-                    twin_uuid=twin_uuid, 
-                    fps=self.get_parameter('webrtc.fps').value, 
-                    time_reference=TimeReference(),
-                    turn_servers=ice_servers
-                )
-                # Initialize the track immediately to start /image_raw subscription
-                self._ros_streamer.initialize_track()
-                self.get_logger().info("ROSCameraStreamer pre-initialized and track subscribed.")
+                # Use SDK's native mqtt client for the streamer if available.
+                # The BaseVideoStreamer from the SDK expects the SDK's mqtt object
+                # which has methods like publish_webrtc_message(), subscribe_webrtc_messages()
+                # that are used internally for WebRTC signaling.
+                mqtt_client = None
+                if self._mqtt_adapter is not None:
+                    # Get the SDK's native mqtt object from the adapter
+                    mqtt_client = getattr(self._mqtt_adapter, 'sdk_mqtt', None)
+                    if mqtt_client is not None:
+                        self.get_logger().info("Using SDK's native MQTT client for WebRTC streaming")
+                    else:
+                        # Fall back to adapter itself (which implements publish/subscribe)
+                        mqtt_client = self._mqtt_adapter
+                        self.get_logger().info("Using CyberwaveAdapter for WebRTC streaming")
+                
+                if mqtt_client is None:
+                    self.get_logger().warning("No MQTT client available for WebRTC streaming")
+                else:
+                    # Store SDK Twin reference for high-level streaming control
+                    try:
+                        if self._mqtt_adapter:
+                            self._sdk_twin = self._mqtt_adapter.twin(twin_uuid)
+                            if self._sdk_twin:
+                                self.get_logger().info(f"SDK Twin object initialized for {twin_uuid}")
+                            else:
+                                self.get_logger().info(f"SDK Twin object is None for {twin_uuid} (may initialize later)")
+                    except Exception as e:
+                        self.get_logger().info(f"SDK Twin not available yet: {e} (this is normal, will use custom streamer)")
+                        self._sdk_twin = None
+                    
+                    self._ros_streamer = ROSCameraStreamer(
+                        node=self,
+                        force_relay=force_turn,
+                        client=mqtt_client, 
+                        twin_uuid=twin_uuid, 
+                        fps=self.get_parameter('webrtc.fps').value, 
+                        time_reference=TimeReference(),
+                        turn_servers=ice_servers
+                    )
+                    # Initialize the track immediately to start /image_raw subscription
+                    self._ros_streamer.initialize_track()
+                    self.get_logger().info("ROSCameraStreamer pre-initialized and track subscribed.")
         except Exception as e:
             self.get_logger().warning(f"Failed to pre-initialize ROSCameraStreamer: {e}")
 
@@ -868,8 +923,9 @@ class MQTTBridgeNode(Node):
                 # Subscribe to general callback topics (e.g., ping)
                 for topic in list(self._mqtt_callbacks.keys()):
                     try:
-                        adapter.subscribe(topic, on_message=self._handle_mqtt_message)
-                        self.get_logger().info(f"Subscribed (adapter) to MQTT topic '{topic}'")
+                        qos = self._mqtt_command_qos if '/command' in topic else 0
+                        adapter.subscribe(topic, on_message=self._handle_mqtt_message, qos=qos)
+                        self.get_logger().info(f"Subscribed (adapter) to MQTT topic '{topic}' (QoS {qos})")
                     except Exception as e:
                         self.get_logger().error(f"Failed to subscribe (adapter) to {topic}: {e}")
         except Exception as e:
@@ -1214,8 +1270,9 @@ class MQTTBridgeNode(Node):
         # Simplified: always subscribe using the topic without a leading slash
         try:
             normalized = topic.lstrip('/')
-            adapter.subscribe(normalized, on_message=self._handle_mqtt_message)
-            self.get_logger().info(f"Subscribed (adapter) to MQTT topic '{normalized}'")
+            qos = self._mqtt_command_qos if '/command' in normalized else 0
+            adapter.subscribe(normalized, on_message=self._handle_mqtt_message, qos=qos)
+            self.get_logger().info(f"Subscribed (adapter) to MQTT topic '{normalized}' (QoS {qos})")
         except Exception as e:
             self.get_logger().warning(f"Adapter subscribe for '{normalized}' failed: {e}")
 
@@ -1768,15 +1825,16 @@ class MQTTBridgeNode(Node):
         if isinstance(data, dict):
             source_type = data.get('source_type')
             
-        # Log downstream message if it comes from tele
+        # Log downstream message if it comes from tele (debug level to reduce overhead)
         if source_type == SOURCE_TYPE_TELE:
             self.get_logger().debug(f"Received downstream message from TELE: topic={topic}, content={payload}")
             
+        # Reduced logging for command topics (only log at debug level for performance)
         if '/command' in topic:
-            self.get_logger().info(f"Command topic: {topic}, source_type: {source_type}, payload: {payload[:200]}")
+            self.get_logger().debug(f"Command topic: {topic}, source_type: {source_type}, payload: {payload[:200]}")
         
         if 'webrtc-' in topic:
-            self.get_logger().info(f"Signaling topic: {topic}, source_type: {source_type}, payload: {payload[:100]}...")
+            self.get_logger().debug(f"Signaling topic: {topic}, source_type: {source_type}, payload: {payload[:100]}...")
             
         is_signaling = 'webrtc-' in topic
         
@@ -2332,7 +2390,11 @@ class MQTTBridgeNode(Node):
             self.get_logger().error(f"Error in tool IO callback: {e}")
 
     def _maybe_auto_start_webrtc(self) -> None:
-        """Start WebRTC proactively so the edge is ready before frontend connects."""
+        """Initialize WebRTC infrastructure for SDK Twin API command handling.
+        
+        This verifies that the WebRTC infrastructure is ready. Actual streaming
+        starts when start_camera_stream() is called (triggered by start_video commands).
+        """
         if self._auto_start_timer is not None:
             try:
                 self._auto_start_timer.cancel()
@@ -2340,9 +2402,18 @@ class MQTTBridgeNode(Node):
                 pass
             self._auto_start_timer = None
 
-        if getattr(self, "_ros_streamer", None) is not None:
-            self.get_logger().info("WebRTC auto-start skipped: streamer already active")
+        # Check if WebRTC infrastructure is ready (ROSCameraStreamer)
+        if not hasattr(self, '_ros_streamer') or self._ros_streamer is None:
+            self.get_logger().warning("WebRTC auto-start skipped: ROSCameraStreamer not initialized")
+            self._schedule_auto_start_retry()
             return
+
+        # Check if WebRTC peer connection is already active
+        if getattr(self, "_ros_streamer", None) is not None:
+            existing_pc = getattr(self._ros_streamer, "pc", None)
+            if existing_pc and getattr(existing_pc, "connectionState", "closed") not in ["closed", "failed", None]:
+                self.get_logger().info("WebRTC auto-start skipped: peer connection already active")
+                return
 
         if self._mqtt_adapter is None:
             self.get_logger().warning("WebRTC auto-start skipped: Cyberwave adapter not initialized")
@@ -2360,9 +2431,16 @@ class MQTTBridgeNode(Node):
             self._schedule_auto_start_retry()
             return
 
+        if not hasattr(self, '_ros_streamer') or self._ros_streamer is None:
+            self.get_logger().warning("WebRTC auto-start skipped: ROSCameraStreamer not initialized")
+            self._schedule_auto_start_retry()
+            return
+
         try:
-            self.get_logger().info("WebRTC auto-start: starting camera stream")
-            self.start_camera_stream()
+            self.get_logger().info(
+                "WebRTC infrastructure ready. SDK Twin API will handle start_video commands. "
+                f"Twin UUID: {twin_uuid}"
+            )
         except Exception as e:
             self.get_logger().error(f"WebRTC auto-start failed: {e}")
             self._schedule_auto_start_retry()
@@ -2372,6 +2450,46 @@ class MQTTBridgeNode(Node):
         retry_sec = getattr(self, "_auto_start_retry_sec", 5.0)
         self._auto_start_timer = self.create_timer(retry_sec, self._maybe_auto_start_webrtc)
         self.get_logger().info(f"WebRTC auto-start retry scheduled in {retry_sec:.1f}s")
+
+    def _schedule_webrtc_retry(self, delay_sec: float = 30.0) -> None:
+        """Schedule a retry of WebRTC stream start after a failure (e.g., signaling timeout)."""
+        if hasattr(self, '_ros_streamer') and self._ros_streamer is not None:
+            try:
+                self._ros_streamer._answer_received = False
+                self._ros_streamer._answer_data = None
+                if hasattr(self._ros_streamer, 'pc') and self._ros_streamer.pc:
+                    asyncio.run_coroutine_threadsafe(
+                        self._ros_streamer.pc.close(), 
+                        self._async_loop
+                    )
+                    self._ros_streamer.pc = None
+            except Exception as e:
+                self.get_logger().debug(f"Error resetting streamer state: {e}")
+        
+        if hasattr(self, '_webrtc_retry_timer') and self._webrtc_retry_timer is not None:
+            try:
+                self._webrtc_retry_timer.cancel()
+            except Exception:
+                pass
+        
+        self._webrtc_retry_timer = self.create_timer(delay_sec, self._webrtc_retry_callback)
+        self.get_logger().info(f"WebRTC stream retry scheduled in {delay_sec:.1f}s")
+    
+    def _webrtc_retry_callback(self) -> None:
+        """Callback for WebRTC retry timer."""
+        if hasattr(self, '_webrtc_retry_timer') and self._webrtc_retry_timer is not None:
+            try:
+                self._webrtc_retry_timer.cancel()
+            except Exception:
+                pass
+            self._webrtc_retry_timer = None
+        
+        self.get_logger().info("Retrying WebRTC stream start...")
+        try:
+            self.start_camera_stream()
+        except Exception as e:
+            self.get_logger().error(f"WebRTC retry failed: {e}")
+            self._schedule_webrtc_retry(60.0)
 
     def reset_internal_odometry(self) -> None:
         """Resets internal dead-reckoning variables to zero."""
@@ -2383,12 +2501,15 @@ class MQTTBridgeNode(Node):
         self.get_logger().info("Internal odometry has been reset to (0,0,0)")
 
     def start_camera_stream(self, recording: bool = True, fps: Optional[int] = None) -> None:
-        """Starts the camera stream using the ROS-aware streamer.
+        """Starts camera stream using SDK's BaseVideoStreamer.start() method.
+        
+        Our ROSCameraStreamer extends SDK's BaseVideoStreamer and adds:
+        - ROS 2 image topic subscription (/image_raw)
+        - Frame format conversion (ROS Image -> VideoFrame)
+        - Frame caching for immediate streaming
         
         COMPLIANCE NOTE (2026-01-18): 
-        The Edge Device (this node) acts as the Offerer. This matches the 
-        architecture used in the Go2 bridge project to ensure consistent 
-        WebRTC management across all edge devices.
+        The Edge Device (this node) acts as the WebRTC Offerer.
         """
         import inspect
         caller = "unknown"
@@ -2411,9 +2532,6 @@ class MQTTBridgeNode(Node):
                     fps = 30 # Default to 30
         
         self.get_logger().info(f"Starting WebRTC camera stream (recording={recording}, fps={fps})... (called by: {caller})")
-        if self._mqtt_adapter is None:
-            self.get_logger().error("Aborting camera stream: Cyberwave API Token is required for WebRTC streaming. Please provide a token via parameters or environment (CYBERWAVE_TOKEN).")
-            return
         try:
             twin_uuid = getattr(self._mapping, 'twin_uuid', None)
             if not twin_uuid:
@@ -2442,25 +2560,32 @@ class MQTTBridgeNode(Node):
             self.get_logger().info(f"Triggering async streamer start (Edge as Offerer) for twin {twin_uuid}")
             
             # Wrap the coroutine to capture exceptions
+            # NOTE: self._ros_streamer is ROSCameraStreamer which extends SDK's BaseVideoStreamer
+            # Calling .start() uses the SDK's WebRTC signaling methods internally
             async def _start_with_logging():
                 try:
-                    self.get_logger().info("SDK start() coroutine beginning...")
+                    self.get_logger().info("SDK BaseVideoStreamer.start() coroutine beginning...")
                     await self._ros_streamer.start()
-                    self.get_logger().info("SDK start() coroutine completed successfully")
+                    self.get_logger().info("SDK BaseVideoStreamer.start() coroutine completed successfully")
                 except Exception as e:
-                    self.get_logger().error(f"SDK start() coroutine failed: {e}")
+                    self.get_logger().error(f"SDK BaseVideoStreamer.start() failed: {e}")
                     import traceback
                     self.get_logger().error(f"Traceback: {traceback.format_exc()}")
                     raise
             
             future = asyncio.run_coroutine_threadsafe(_start_with_logging(), self._async_loop)
             
-            # Add a callback to check for errors after completion
+            # Add a callback to check for errors after completion and schedule retry
             def _on_done(fut):
                 try:
                     fut.result()  # This will raise if the coroutine failed
+                except TimeoutError as e:
+                    self.get_logger().warning(f"WebRTC signaling timed out: {e}")
+                    self.get_logger().info("Backend may not be running. Will retry WebRTC auto-start in 30s...")
+                    self._schedule_webrtc_retry(30.0)
                 except Exception as e:
                     self.get_logger().error(f"Async streamer start failed: {e}")
+                    self._schedule_webrtc_retry(30.0)
             future.add_done_callback(_on_done)
             
             self.get_logger().info(f"Camera stream object initialized for twin {twin_uuid}")
@@ -2468,16 +2593,19 @@ class MQTTBridgeNode(Node):
             self.get_logger().error(f"Failed to start camera stream: {e}")
 
     def stop_camera_stream(self) -> None:
-        """Stops the camera stream."""
+        """Stops the camera stream using SDK's BaseVideoStreamer.stop() method.
+        
+        NOTE: self._ros_streamer extends SDK's BaseVideoStreamer, so calling
+        .stop() uses the SDK's cleanup and connection termination logic.
+        """
         if hasattr(self, '_ros_streamer') and self._ros_streamer is not None:
             try:
-                # Instead of destroying the streamer, we just stop the WebRTC session
-                # This allows us to keep the ROS subscription active for pre-caching
-                if hasattr(self._ros_streamer, 'pc') and self._ros_streamer.pc:
-                    self.get_logger().info("Closing WebRTC PeerConnection...")
-                    asyncio.run_coroutine_threadsafe(self._ros_streamer.pc.close(), self._async_loop)
-                    # Reset internal state of streamer but keep the track
-                    self._ros_streamer._reset_state()
+                # Use SDK's BaseVideoStreamer.stop() method which properly handles cleanup
+                self.get_logger().info("Calling SDK BaseVideoStreamer.stop() to close WebRTC stream...")
+                asyncio.run_coroutine_threadsafe(
+                    self._ros_streamer.stop(), 
+                    self._async_loop
+                )
                 
                 self.get_logger().info("Camera WebRTC stream stopped (track remains active for pre-caching)")
                 

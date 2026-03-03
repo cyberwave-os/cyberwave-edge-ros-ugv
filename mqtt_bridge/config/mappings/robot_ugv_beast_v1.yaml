@@ -81,6 +81,8 @@ command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.CommandRegistry
 
 # Camera streaming configuration
 camera:
+  # ROS2 image topic to stream via WebRTC
+  image_topic: "/image_raw"
   # Video frame format. Potential alternatives:
   # - "yuv420p": Standard WebRTC format, highly compatible (Default)
   # - "rgb24": Raw RGB format (requires conversion in most browsers)
@@ -91,6 +93,17 @@ camera:
   fps: 15  # Match webrtc.fps and camera framerate
   image_width: 640  # Match actual camera resolution
   image_height: 480  # Match actual camera resolution
+  # Hardware camera settings for ugv_vision (usb_cam)
+  video_device: "/dev/video0"
+  io_method: "mmap"
+  frame_id: "pt_camera_link"
+  pixel_format: "yuyv"
+  # Auto-features - set to true if camera supports them, false otherwise
+  auto_white_balance: true
+  autoexposure: true
+  autofocus: false  # Most USB webcams don't have motorized autofocus
+  camera_name: "pt_camera"
+  camera_info_url: "package://ugv_vision/config/camera_info.yaml"
 
 # Internal Odometry calculation settings (for robots without /odom topic)
 internal_odometry:

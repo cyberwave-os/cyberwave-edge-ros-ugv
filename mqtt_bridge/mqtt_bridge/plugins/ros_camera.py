@@ -256,13 +256,13 @@ class ROSCameraStreamer(BaseVideoStreamer):
         super().__init__(client, *args, **kwargs)
         self.node = node
         
-        try:
-            self.image_topic = self.node.get_parameter('image_topic').value
-        except Exception:
-            self.image_topic = "/image_raw"
-            
+        # Get camera settings from robot mapping (preferred) or fall back to defaults
         if hasattr(self.node, '_mapping') and self.node._mapping:
-            self.fps = self.node._mapping.raw.get('camera', {}).get('fps', self.fps)
+            camera_config = self.node._mapping.raw.get('camera', {})
+            self.image_topic = camera_config.get('image_topic', '/image_raw')
+            self.fps = camera_config.get('fps', self.fps)
+        else:
+            self.image_topic = "/image_raw"
 
         mode_str = " (TURN relay-only)" if self.force_relay else ""
         self.node.get_logger().info(f"ROSCameraStreamer: {self.image_topic} @ {self.fps}fps{mode_str}")
@@ -310,11 +310,161 @@ class ROSCameraStreamer(BaseVideoStreamer):
         When force_relay is True, patches aiortc to use only TURN relay candidates,
         bypassing NAT/firewall issues.
         """
+        self.node.get_logger().info(f"_setup_webrtc called, force_relay={self.force_relay}")
         if self.force_relay:
             self.node.get_logger().info(
                 "Setting up WebRTC with RELAY-ONLY transport policy (force_turn enabled)"
             )
             with relay_only_ice_mode():
+                self.node.get_logger().info("Inside relay_only_ice_mode context, calling super()._setup_webrtc()")
                 await super()._setup_webrtc()
+                self.node.get_logger().info("Exited relay_only_ice_mode context")
         else:
+            self.node.get_logger().info("Setting up WebRTC with normal ICE (force_turn disabled)")
             await super()._setup_webrtc()
+    
+    def _send_offer(self, sdp: str):
+        """Override to add diagnostic logging for WebRTC offer."""
+        import time
+        prefix = self.client.topic_prefix
+        offer_topic = f"{prefix}cyberwave/twin/{self.twin_uuid}/webrtc-offer"
+        
+        sdp_lines = sdp.split('\r\n') if sdp else []
+        self.node.get_logger().info(f"=== WebRTC OFFER BEING SENT ===")
+        self.node.get_logger().info(f"  Topic: {offer_topic}")
+        self.node.get_logger().info(f"  SDP lines: {len(sdp_lines)}")
+        
+        relay_candidates = [l for l in sdp_lines if 'relay' in l.lower()]
+        host_candidates = [l for l in sdp_lines if 'a=candidate' in l and 'host' in l.lower()]
+        srflx_candidates = [l for l in sdp_lines if 'a=candidate' in l and 'srflx' in l.lower()]
+        
+        self.node.get_logger().info(f"  ICE candidates: relay={len(relay_candidates)}, host={len(host_candidates)}, srflx={len(srflx_candidates)}")
+        
+        if relay_candidates:
+            for c in relay_candidates[:3]:
+                self.node.get_logger().info(f"  RELAY: {c[:100]}...")
+        else:
+            self.node.get_logger().warning("  WARNING: No relay candidates in offer - TURN may not be working!")
+        
+        super()._send_offer(sdp)
+        self.node.get_logger().info(f"=== WebRTC OFFER SENT ===")
+    
+    def _subscribe_to_answer(self):
+        """Override to add diagnostic logging for WebRTC answer subscription."""
+        import json
+        
+        if not self.twin_uuid:
+            raise ValueError("twin_uuid must be set before subscribing")
+        
+        prefix = self.client.topic_prefix
+        answer_topic = f"{prefix}cyberwave/twin/{self.twin_uuid}/webrtc-answer"
+        candidate_topic = f"{prefix}cyberwave/twin/{self.twin_uuid}/webrtc-candidate"
+        
+        self.node.get_logger().info(f"=== SUBSCRIBING TO WEBRTC SIGNALING ===")
+        self.node.get_logger().info(f"  Answer topic: {answer_topic}")
+        self.node.get_logger().info(f"  Candidate topic: {candidate_topic}")
+        
+        def logging_on_answer(data):
+            try:
+                payload = data if isinstance(data, dict) else json.loads(data)
+                msg_type = payload.get('type', 'unknown')
+                target = payload.get('target', 'unknown')
+                sender = payload.get('sender', 'unknown')
+                sensor = payload.get('sensor') or payload.get('camera', 'unknown')
+                
+                self.node.get_logger().info(f"=== WEBRTC MESSAGE RECEIVED ===")
+                self.node.get_logger().info(
+                    f"  type={msg_type}, target={target}, sender={sender}, sensor={sensor}"
+                )
+                
+                if msg_type == 'answer':
+                    sdp = payload.get('sdp', '')
+                    sdp_lines = sdp.split('\r\n') if sdp else []
+                    self.node.get_logger().info(f"  Answer SDP lines: {len(sdp_lines)}")
+                    if target == 'edge':
+                        self.node.get_logger().info("  >>> PROCESSING ANSWER FOR EDGE <<<")
+                    else:
+                        self.node.get_logger().warning(f"  Ignoring answer: target={target} (expected 'edge')")
+                elif msg_type == 'candidate':
+                    candidate = payload.get('candidate', {})
+                    self.node.get_logger().info(f"  ICE candidate: {str(candidate)[:100]}...")
+                
+            except Exception as e:
+                self.node.get_logger().error(f"Error logging WebRTC message: {e}")
+            
+            try:
+                payload = data if isinstance(data, dict) else json.loads(data)
+                
+                if payload.get("type") == "offer":
+                    return
+                elif payload.get("type") == "answer":
+                    if payload.get("target") == "edge":
+                        answer_sensor = payload.get("sensor") or payload.get("camera")
+                        expected = self.camera_name if self.camera_name is not None else "default"
+                        if answer_sensor is None or answer_sensor == expected:
+                            self._answer_data = payload
+                            self._answer_received = True
+                            self.node.get_logger().info(f"  >>> ANSWER ACCEPTED (sensor match) <<<")
+                        else:
+                            self.node.get_logger().warning(
+                                f"  Ignoring answer: sensor mismatch (expected={expected}, got={answer_sensor})"
+                            )
+                elif payload.get("type") == "candidate":
+                    if payload.get("target") == "edge":
+                        self._handle_candidate(payload)
+            except Exception as e:
+                self.node.get_logger().error(f"Error processing WebRTC message: {e}")
+        
+        self.client.subscribe(answer_topic, logging_on_answer)
+        self.client.subscribe(candidate_topic, logging_on_answer)
+        self.node.get_logger().info(f"=== SUBSCRIBED TO WEBRTC SIGNALING ===")
+    
+    async def _wait_for_answer(self, timeout: float = 60.0):
+        """Override to add diagnostic logging while waiting for answer."""
+        import time as time_mod
+        
+        self.node.get_logger().info(f"=== WAITING FOR WEBRTC ANSWER (timeout={timeout}s) ===")
+        start_time = time_mod.time()
+        last_log_time = start_time
+        
+        while not self._answer_received:
+            elapsed = time_mod.time() - start_time
+            
+            if time_mod.time() - last_log_time >= 10.0:
+                self.node.get_logger().warning(
+                    f"  Still waiting for WebRTC answer... {elapsed:.1f}s elapsed"
+                )
+                last_log_time = time_mod.time()
+            
+            if elapsed > timeout:
+                self.node.get_logger().error(
+                    f"=== WEBRTC ANSWER TIMEOUT after {elapsed:.1f}s ==="
+                )
+                self.node.get_logger().error(
+                    "  The cloud/backend is not responding to the WebRTC offer."
+                )
+                self.node.get_logger().error(
+                    "  Check: 1) Cloud service is running, 2) MQTT connectivity, 3) Topic routing"
+                )
+                raise TimeoutError("Timeout waiting for WebRTC answer")
+            
+            await asyncio.sleep(0.1)
+        
+        elapsed = time_mod.time() - start_time
+        self.node.get_logger().info(f"=== WEBRTC ANSWER RECEIVED in {elapsed:.1f}s ===")
+        
+        if self._answer_data is None:
+            raise RuntimeError("Answer received flag set but answer data is None")
+        
+        import json
+        answer = (
+            json.loads(self._answer_data)
+            if isinstance(self._answer_data, str)
+            else self._answer_data
+        )
+        
+        from aiortc import RTCSessionDescription
+        await self.pc.setRemoteDescription(
+            RTCSessionDescription(sdp=answer["sdp"], type=answer["type"])
+        )
+        self.node.get_logger().info("=== WEBRTC REMOTE DESCRIPTION SET ===")

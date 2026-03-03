@@ -2,44 +2,44 @@
   ros__parameters:
     broker:
       host: "" # Set via CYBERWAVE_MQTT_HOST env var (edge core provides this)
-      port: 1883
-      username: "mqttcyb"
-      password: "mqttcyb231"
+      # Port 8883: TLS encrypted (recommended, auto-enabled with SDK)
+      # Port 1883: Plain TCP (legacy, not recommended)
+      port: 8883
+      # username: ""
+      # password: ""
+      # When false (default), uses Cyberwave SDK with token authentication (recommended)
+      # When true, uses direct paho-mqtt connection with username/password (legacy)
+      use_paho_direct: false
       use_cyberwave: true # Enable Cyberwave SDK for upstream publishing
       # Cyberwave API token — set via CYBERWAVE_TOKEN / CYBERWAVE_API_KEY env var
       cyberwave_token: ""
     # Topic prefix: set via CYBERWAVE_ENVIRONMENT env var (empty = production)
-    topic_prefix: ""
-    image_topic: "/image_raw" # Topic to stream to WebRTC
+    topic_prefix: "" # for production set ""
     prevent_duplicate_offers: true # Do not re-send offers while a connection is alive
-    # Camera config overrides for ugv_vision (usb_cam).
-    # These will be applied by ugv_vision/launch/camera.launch.py if present.
-    camera:
-      video_device: "/dev/video0"  # Primary USB camera endpoint
-      framerate: 15.0
-      io_method: "mmap"
-      frame_id: "pt_camera_link"
-      pixel_format: "yuyv"
-      # Auto-features - set to true if camera supports them, false otherwise
-      auto_white_balance: true
-      autoexposure: true
-      autofocus: false  # Most USB webcams don't have motorized autofocus - disable to prevent issues
-      # Common image sizes (WxH): 1920x1080, 1280x720, 1024x768, 800x600, 640x480, 320x240
-      image_width: 640
-      image_height: 480
-      camera_name: "pt_camera"
-      camera_info_url: "package://ugv_vision/config/camera_info.yaml"
+    # Note: Robot-specific camera settings (image_topic, resolution, fps, etc.) are in
+    # the robot mapping file (e.g., config/mappings/robot_ugv_beast_v1.yaml) under 'camera'.
     # WebRTC auto-start configuration
     webrtc:
+      # When true, uses SDK's run_with_auto_reconnect() which:
+      # - Auto-reconnects WebRTC on disconnect
+      # - Listens for start_video/stop_video MQTT commands
+      # - Monitors connection health
       auto_start: true
-      auto_start_delay_sec: 10.0 # Increased from 5.0 to allow hardware to settle
-      auto_start_retry_sec: 5.0
+      auto_start_delay_sec: 10.0 # Delay before starting (allows hardware to settle)
+      auto_start_retry_sec: 5.0  # Retry interval if prerequisites not ready
       fps: 15.0
-      force_turn: true # Set to true to force all WebRTC traffic through TURN relay (bypasses NAT/firewall)
+      force_turn: true # Force all WebRTC traffic through TURN relay (bypasses NAT/firewall)
 
     # Global kill-switch for all upstream MQTT traffic (ROS -> MQTT)
     # If true, no telemetry, status, or health messages will be sent to the cloud.
     disable_all_upstream: false
+
+    # MQTT QoS (Quality of Service) for command subscriptions
+    # 0 = At most once (fastest, may lose messages)
+    # 1 = At least once (reliable, small overhead)
+    # 2 = Exactly once (slowest, highest reliability)
+    # Recommended: 1 for low-latency reliable command execution
+    mqtt_command_qos: 1
 
     # Automatically reload mapping file when it changes on disk.
     mapping_reload_on_change: true
@@ -97,7 +97,6 @@
           # The bridge will dynamically publish to the appropriate ROS topic based on command type
           # This topic is handled specially by the CommandRegistry - no direct ROS mapping needed
           # Supported commands: cmd_vel, led_ctrl, pan_tilt, gripper, estop
-          # Supported commands: cmd_vel, led_ctrl, pan_tilt, gripper, estop
 
       ros2mqtt:
         # list of ROS topics to bridge -> MQTT
@@ -105,7 +104,7 @@
           - /ping/ros
           - /ugv/joint_states
           - /joint_states
-          - /ugv/imu
+          # - /ugv/imu  # Disabled by default to reduce MQTT bandwidth
           - /ugv/battery_status
           - /voltage
           # - /odom
@@ -128,11 +127,11 @@
             sdk_method: update_joint_state
             type: sensor_msgs/JointState
             rate: 5.0 # Higher rate for smooth servo feedback
-          /ugv/imu:
-            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/imu"
-            type: sensor_msgs/Imu
+          # /ugv/imu:  # Disabled by default to reduce MQTT bandwidth
+          #   mqtt_topic: "cyberwave/twin/{twin_uuid}/imu"
+          #   type: sensor_msgs/Imu
           /ugv/battery_status:
-            mqtt_topic: "cyberwave/twin/{twin_uuid}/status/battery"
+            mqtt_topic: "cyberwave/twin/{twin_uuid}/battery/status"
             type: sensor_msgs/BatteryState
             interval: 60.0 # Once every one minute
           /voltage:

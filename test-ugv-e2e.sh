@@ -278,7 +278,7 @@ assert creds and creds.token, 'credentials/token not found after login'
 assert creds.workspace_uuid, 'workspace_uuid not found in credentials'
 
 base_url = get_api_url()
-client = Cyberwave(base_url=base_url, token=creds.token)
+client = Cyberwave(base_url=base_url, api_key=creds.token)
 headers = {
     'Authorization': f'Token {creds.token}',
     'Accept': 'application/json',

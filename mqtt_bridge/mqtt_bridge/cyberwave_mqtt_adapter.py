@@ -4,6 +4,7 @@ compatible with the existing mqtt_bridge node.
 This adapter is optional — if the Cyberwave SDK is not available the node
 continues to use paho-mqtt directly.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,6 +26,7 @@ from importlib.metadata import version, PackageNotFoundError
 # available the adapter should raise early so callers can fall back.
 try:
     from cyberwave import Cyberwave
+
     # Import source types with fallbacks for SDK version compatibility
     try:
         from cyberwave import SOURCE_TYPE_EDGE
@@ -111,18 +113,20 @@ class CyberwaveAdapter:
                     "Cyberwave SDK requires an API token. Set 'cyberwave_token' in params.yaml "
                     "or export CYBERWAVE_TOKEN environment variable."
                 )
-            
-            self._logger.info(f"Initializing Cyberwave client for broker {broker}:{port}")
+
+            self._logger.info(
+                f"Initializing Cyberwave client for broker {broker}:{port}"
+            )
             self._logger.info(f"Using topic_prefix: '{topic_prefix or ''}'")
-            
+
             # Initialize the Cyberwave SDK client with topic_prefix
             cw = Cyberwave(
-                token=api_token, 
-                mqtt_host=broker, 
+                api_key=api_token,
+                mqtt_host=broker,
                 mqtt_port=port,
-                topic_prefix=topic_prefix or ""
+                topic_prefix=topic_prefix or "",
             )
-            
+
             self._logger.info(f"Cyberwave client initialized successfully")
 
             # store factory instance for passthroughs and keep topic prefix
@@ -133,28 +137,34 @@ class CyberwaveAdapter:
             # object with connect(). This is best-effort; the SDK may manage
             # its own connection lifecycle.
             try:
-                if hasattr(cw, 'mqtt') and callable(getattr(cw.mqtt, 'connect', None)):
+                if hasattr(cw, "mqtt") and callable(getattr(cw.mqtt, "connect", None)):
                     self._logger.info("Calling cw.mqtt.connect()...")
                     cw.mqtt.connect()
                     self._logger.info("cw.mqtt.connect() completed")
-                    
+
                     # Wait for connection to establish (up to 5 seconds)
                     self._logger.info("Waiting for MQTT connection to establish...")
                     for i in range(50):  # 50 * 0.1s = 5 seconds max
-                        if hasattr(cw.mqtt, '_client') and hasattr(cw.mqtt._client, 'connected'):
+                        if hasattr(cw.mqtt, "_client") and hasattr(
+                            cw.mqtt._client, "connected"
+                        ):
                             if cw.mqtt._client.connected:
-                                self._logger.info(f"MQTT connection established after {i * 0.1:.1f}s")
+                                self._logger.info(
+                                    f"MQTT connection established after {i * 0.1:.1f}s"
+                                )
                                 break
                         time.sleep(0.1)
                     else:
-                        self._logger.warning("MQTT connection not established after 5 seconds")
-                    
-                elif hasattr(cw, 'connect') and callable(getattr(cw, 'connect', None)):
+                        self._logger.warning(
+                            "MQTT connection not established after 5 seconds"
+                        )
+
+                elif hasattr(cw, "connect") and callable(getattr(cw, "connect", None)):
                     self._logger.info("Calling cw.connect()...")
                     cw.connect()
                     self._logger.info("cw.connect() completed")
             except Exception:
-                self._logger.debug('Cyberwave factory connect() raised during init')
+                self._logger.debug("Cyberwave factory connect() raised during init")
 
             # factory exposes .mqtt (preferred) or .mqtt_client
             client_obj = getattr(cw, "mqtt", None) or getattr(cw, "mqtt_client", None)
@@ -167,7 +177,9 @@ class CyberwaveAdapter:
                 for attr in ("connected", "is_connected", "connection", "state"):
                     if hasattr(client_obj, attr):
                         try:
-                            self._logger.info(f"client.{attr} = {getattr(client_obj, attr)}")
+                            self._logger.info(
+                                f"client.{attr} = {getattr(client_obj, attr)}"
+                            )
                         except Exception:
                             self._logger.info(f"client has attribute {attr}")
             except Exception:
@@ -179,19 +191,25 @@ class CyberwaveAdapter:
             # adapter call the real client's publish/subscribe API directly
             # (for example the paho client) which is generally stable.
             core_client = None
-            for candidate in ("_client", "client", "mqtt_client", "mqttc", "_mqtt_client"):
+            for candidate in (
+                "_client",
+                "client",
+                "mqtt_client",
+                "mqttc",
+                "_mqtt_client",
+            ):
                 try:
                     c = getattr(client_obj, candidate, None)
                 except Exception:
                     c = None
-                if c is not None and hasattr(c, 'subscribe') and hasattr(c, 'publish'):
+                if c is not None and hasattr(c, "subscribe") and hasattr(c, "publish"):
                     core_client = c
                     break
 
             # If we didn't find a nested core, but the client_obj itself
             # implements publish/subscribe, just use it.
             if core_client is None:
-                if hasattr(client_obj, 'subscribe') and hasattr(client_obj, 'publish'):
+                if hasattr(client_obj, "subscribe") and hasattr(client_obj, "publish"):
                     core_client = client_obj
                 else:
                     # Last resort: leave the original wrapper and hope it
@@ -199,10 +217,10 @@ class CyberwaveAdapter:
                     core_client = client_obj
 
             self._mqtt_client = core_client
-            
+
             # Store reference to the SDK's high-level mqtt object for direct use
             # by components that need SDK-native methods (like BaseVideoStreamer)
-            self._sdk_mqtt = getattr(cw, 'mqtt', None)
+            self._sdk_mqtt = getattr(cw, "mqtt", None)
 
             # pending subscriptions queued while client is not connected
             self._pending_subs = []  # list of (topic, handler, qos)
@@ -210,10 +228,12 @@ class CyberwaveAdapter:
             self._pending_lock = threading.Lock()
             # background thread that flushes pending subscriptions when connected
             try:
-                self._sub_flush_thread = threading.Thread(target=self._sub_flush_loop, daemon=True)
+                self._sub_flush_thread = threading.Thread(
+                    target=self._sub_flush_loop, daemon=True
+                )
                 self._sub_flush_thread.start()
             except Exception:
-                self._logger.debug('Could not start subscription flush thread')
+                self._logger.debug("Could not start subscription flush thread")
         except Exception:
             self._logger.exception("Failed to initialize Cyberwave factory client")
             # re-raise so callers know initialization failed and can fallback
@@ -224,15 +244,15 @@ class CyberwaveAdapter:
         # Adapter should be tolerant to different underlying MQTT client
         # implementations. Check a few common attribute/method names used
         # by MQTT clients for connection state.
-        if not getattr(self, '_mqtt_client', None):
+        if not getattr(self, "_mqtt_client", None):
             return False
         client = self._mqtt_client
         # common boolean attribute
-        val = getattr(client, 'connected', None)
+        val = getattr(client, "connected", None)
         if isinstance(val, bool):
             return val
         # common boolean or callable is_connected
-        is_conn = getattr(client, 'is_connected', None)
+        is_conn = getattr(client, "is_connected", None)
         if callable(is_conn):
             try:
                 return bool(is_conn())
@@ -241,7 +261,7 @@ class CyberwaveAdapter:
         if isinstance(is_conn, bool):
             return is_conn
         # some clients expose a 'state' or 'connection' attribute
-        for attr in ('state', 'connection'):
+        for attr in ("state", "connection"):
             v = getattr(client, attr, None)
             if isinstance(v, bool):
                 return v
@@ -250,21 +270,21 @@ class CyberwaveAdapter:
     @property
     def sdk_mqtt(self):
         """Return the SDK's native MQTT client object.
-        
+
         This provides direct access to the Cyberwave SDK's mqtt interface,
-        which has specialized methods like publish_webrtc_message(), 
+        which has specialized methods like publish_webrtc_message(),
         subscribe_webrtc_messages(), etc. Use this for components that need
         SDK-native functionality (e.g., BaseVideoStreamer).
         """
-        return getattr(self, '_sdk_mqtt', None)
-    
+        return getattr(self, "_sdk_mqtt", None)
+
     @property
     def cyberwave_factory(self):
         """Return the Cyberwave SDK factory instance.
-        
+
         This provides access to cw.twin(), cw.video_stream(), etc.
         """
-        return getattr(self, '_cw', None)
+        return getattr(self, "_cw", None)
 
     def _discover_core_client(self, client_obj: Any) -> Any:
         """Find a concrete MQTT client under a factory wrapper.
@@ -278,11 +298,13 @@ class CyberwaveAdapter:
                 c = getattr(client_obj, candidate, None)
             except Exception:
                 c = None
-            if c is not None and hasattr(c, 'subscribe') and hasattr(c, 'publish'):
-                self._logger.debug("Using underlying client via client_obj.%s", candidate)
+            if c is not None and hasattr(c, "subscribe") and hasattr(c, "publish"):
+                self._logger.debug(
+                    "Using underlying client via client_obj.%s", candidate
+                )
                 return c
         # Fallback: prefer client_obj if it itself has publish/subscribe
-        if hasattr(client_obj, 'subscribe') and hasattr(client_obj, 'publish'):
+        if hasattr(client_obj, "subscribe") and hasattr(client_obj, "publish"):
             return client_obj
         return client_obj
 
@@ -293,6 +315,7 @@ class CyberwaveAdapter:
         Pulled out of the subscribe body so it can be unit-tested and reused
         from other places (for example during flush).
         """
+
         def handler(*args) -> None:
             # SDK may call handler(data) or handler(topic, data)
             try:
@@ -321,21 +344,23 @@ class CyberwaveAdapter:
                 try:
                     # Determine data for the callback
                     try:
-                        data = json.loads(b.decode('utf-8'))
+                        data = json.loads(b.decode("utf-8"))
                     except Exception:
-                        data = b.decode('utf-8')
+                        data = b.decode("utf-8")
 
                     # Helper to call the callback correctly
                     def invoke(cb, *args):
                         if inspect.iscoroutinefunction(cb):
-                            # We need to run this in an event loop. 
-                            loop = getattr(self, '_loop', None)
+                            # We need to run this in an event loop.
+                            loop = getattr(self, "_loop", None)
                             if loop and loop.is_running():
                                 asyncio.run_coroutine_threadsafe(cb(*args), loop)
                             else:
                                 # Fallback: try to find any running loop
                                 try:
-                                    asyncio.run_coroutine_threadsafe(cb(*args), asyncio.get_event_loop())
+                                    asyncio.run_coroutine_threadsafe(
+                                        cb(*args), asyncio.get_event_loop()
+                                    )
                                 except Exception:
                                     pass
                         else:
@@ -365,7 +390,9 @@ class CyberwaveAdapter:
                     except Exception as e:
                         raise
                 except Exception:
-                    self._logger.exception(f"Error in on_message handler for topic '{topic_arg}'. Payload snippet: {b[:100]!r}")
+                    self._logger.exception(
+                        f"Error in on_message handler for topic '{topic_arg}'. Payload snippet: {b[:100]!r}"
+                    )
 
         return handler
 
@@ -379,7 +406,7 @@ class CyberwaveAdapter:
         try:
             # If the payload is already a string or bytes, it means it's already
             # encoded for the wire. In this case, bypass the high-level SDK
-            # validation which can be noisy for custom topics (like joint updates 
+            # validation which can be noisy for custom topics (like joint updates
             # used for odometry).
             if isinstance(payload, (str, bytes, bytearray)):
                 return self._mqtt_client.publish(topic, payload, qos=qos)
@@ -388,7 +415,11 @@ class CyberwaveAdapter:
             # calling the high-level factory's mqtt.publish if available so
             # we don't reimplement payload handling for non-string types.
             try:
-                if getattr(self, '_cw', None) is not None and hasattr(self._cw, 'mqtt') and callable(getattr(self._cw.mqtt, 'publish', None)):
+                if (
+                    getattr(self, "_cw", None) is not None
+                    and hasattr(self._cw, "mqtt")
+                    and callable(getattr(self._cw.mqtt, "publish", None))
+                ):
                     return self._cw.mqtt.publish(topic, payload, qos=qos)
             except Exception:
                 # fall back to underlying client
@@ -399,7 +430,9 @@ class CyberwaveAdapter:
             self._logger.exception("CyberwaveAdapter.publish failed: %s", e)
             raise
 
-    def subscribe(self, topic: str, on_message: Optional[Callable] = None, qos: int = 1) -> Any:
+    def subscribe(
+        self, topic: str, on_message: Optional[Callable] = None, qos: int = 1
+    ) -> Any:
         """Subscribe and translate SDK handler signature into node callback.
 
         The SDK will call handlers with `data` (already JSON-decoded or string).
@@ -431,7 +464,11 @@ class CyberwaveAdapter:
 
         # Try preferred high-level SDK subscribe first (factory.mqtt.subscribe)
         try:
-            if getattr(self, '_cw', None) is not None and hasattr(self._cw, 'mqtt') and callable(getattr(self._cw.mqtt, 'subscribe', None)):
+            if (
+                getattr(self, "_cw", None) is not None
+                and hasattr(self._cw, "mqtt")
+                and callable(getattr(self._cw.mqtt, "subscribe", None))
+            ):
                 try:
                     # Always pass our internal wrapper `handler` which converts
                     # the SDK's handler signature into the node-friendly
@@ -445,10 +482,15 @@ class CyberwaveAdapter:
             # can attach a per-topic callback via message_callback_add if
             # available, then call subscribe(topic, qos).
             try:
-                add_cb = getattr(self._mqtt_client, 'message_callback_add', None)
+                add_cb = getattr(self._mqtt_client, "message_callback_add", None)
                 if callable(add_cb) and on_message is not None:
                     try:
-                        add_cb(topic, lambda client, userdata, msg: handler(msg.topic, msg.payload))
+                        add_cb(
+                            topic,
+                            lambda client, userdata, msg: handler(
+                                msg.topic, msg.payload
+                            ),
+                        )
                     except Exception:
                         # ignore callback attachment failure
                         pass
@@ -484,44 +526,83 @@ class CyberwaveAdapter:
                 if pending and self.connected:
                     for topic, handler, qos in pending:
                         try:
-                            self._logger.debug("Flushing queued subscription to %s", topic)
-                            if getattr(self, '_cw', None) is not None and hasattr(self._cw, 'mqtt') and callable(getattr(self._cw.mqtt, 'subscribe', None)):
+                            self._logger.debug(
+                                "Flushing queued subscription to %s", topic
+                            )
+                            if (
+                                getattr(self, "_cw", None) is not None
+                                and hasattr(self._cw, "mqtt")
+                                and callable(getattr(self._cw.mqtt, "subscribe", None))
+                            ):
                                 try:
                                     self._cw.mqtt.subscribe(topic, handler, qos=qos)
                                 except Exception:
                                     try:
                                         # try attach callback for underlying client
-                                        add_cb = getattr(self._mqtt_client, 'message_callback_add', None)
+                                        add_cb = getattr(
+                                            self._mqtt_client,
+                                            "message_callback_add",
+                                            None,
+                                        )
                                         if callable(add_cb):
                                             try:
-                                                add_cb(topic, lambda client, userdata, msg: handler(msg.topic, msg.payload))
+                                                add_cb(
+                                                    topic,
+                                                    lambda client,
+                                                    userdata,
+                                                    msg: handler(
+                                                        msg.topic, msg.payload
+                                                    ),
+                                                )
                                             except Exception:
                                                 pass
                                         self._mqtt_client.subscribe(topic, qos)
                                     except Exception:
-                                        self._logger.debug("Failed to subscribe to %s during flush", topic)
+                                        self._logger.debug(
+                                            "Failed to subscribe to %s during flush",
+                                            topic,
+                                        )
                             else:
                                 try:
-                                    add_cb = getattr(self._mqtt_client, 'message_callback_add', None)
+                                    add_cb = getattr(
+                                        self._mqtt_client, "message_callback_add", None
+                                    )
                                     if callable(add_cb):
                                         try:
-                                            add_cb(topic, lambda client, userdata, msg: handler(msg.topic, msg.payload))
+                                            add_cb(
+                                                topic,
+                                                lambda client, userdata, msg: handler(
+                                                    msg.topic, msg.payload
+                                                ),
+                                            )
                                         except Exception:
                                             pass
                                     self._mqtt_client.subscribe(topic, qos)
                                 except Exception:
-                                    self._logger.debug("Failed to subscribe to %s during flush", topic)
+                                    self._logger.debug(
+                                        "Failed to subscribe to %s during flush", topic
+                                    )
                         except Exception:
-                            self._logger.exception("Error flushing subscription %s", topic)
+                            self._logger.exception(
+                                "Error flushing subscription %s", topic
+                            )
             except Exception:
-                self._logger.debug('Subscription flush loop encountered an error')
+                self._logger.debug("Subscription flush loop encountered an error")
             time.sleep(0.1)
 
     # High-level passthroughs that prefer SDK implementations when present
-    def update_joint_state(self, twin_uuid: str, joint_name: str, position: Optional[float] = None, velocity: Optional[float] = None, effort: Optional[float] = None, source_type: Optional[str] = None) -> Any:
+    def update_joint_state(
+        self,
+        twin_uuid: str,
+        joint_name: str,
+        position: Optional[float] = None,
+        velocity: Optional[float] = None,
+        effort: Optional[float] = None,
+        source_type: Optional[str] = None,
+    ) -> Any:
         """
         Prefer the SDK's update_joint_state when available, otherwise publish JSON.
-        
+
         Args:
             twin_uuid: UUID of the twin
             joint_name: Name of the joint
@@ -533,36 +614,52 @@ class CyberwaveAdapter:
         # Default to SOURCE_TYPE_EDGE for edge devices
         if source_type is None:
             source_type = SOURCE_TYPE_EDGE
-        
+
         try:
-            if getattr(self, '_cw', None) is not None and hasattr(self._cw, 'mqtt') and callable(getattr(self._cw.mqtt, 'update_joint_state', None)):
-                return self._cw.mqtt.update_joint_state(twin_uuid, joint_name, position=position, velocity=velocity, effort=effort, source_type=source_type)
+            if (
+                getattr(self, "_cw", None) is not None
+                and hasattr(self._cw, "mqtt")
+                and callable(getattr(self._cw.mqtt, "update_joint_state", None))
+            ):
+                return self._cw.mqtt.update_joint_state(
+                    twin_uuid,
+                    joint_name,
+                    position=position,
+                    velocity=velocity,
+                    effort=effort,
+                    source_type=source_type,
+                )
         except Exception:
-            self._logger.debug('SDK update_joint_state failed, falling back to publish')
+            self._logger.debug("SDK update_joint_state failed, falling back to publish")
 
         # Fallback: construct payload and publish to standard update topic
         joint_state = {}
         if position is not None:
-            joint_state['position'] = position
+            joint_state["position"] = position
         if velocity is not None:
-            joint_state['velocity'] = velocity
+            joint_state["velocity"] = velocity
         if effort is not None:
-            joint_state['effort'] = effort
+            joint_state["effort"] = effort
 
         topic = f"{self.topic_prefix}cyberwave/joint/{twin_uuid}/update"
         message = {
             "source_type": source_type,
-            'type': 'joint_state',
-            'joint_name': joint_name,
-            'joint_state': joint_state,
-            'timestamp': time.time(),
+            "type": "joint_state",
+            "joint_name": joint_name,
+            "joint_state": joint_state,
+            "timestamp": time.time(),
         }
         return self.publish(topic, message)
 
-    def update_joints_state(self, twin_uuid: str, joint_positions: Dict[str, float], source_type: Optional[str] = None) -> Any:
+    def update_joints_state(
+        self,
+        twin_uuid: str,
+        joint_positions: Dict[str, float],
+        source_type: Optional[str] = None,
+    ) -> Any:
         """
         Prefer the SDK's update_joints_state when available, otherwise publish a flat dict.
-        
+
         Args:
             twin_uuid: UUID of the twin
             joint_positions: Dict mapping joint names to positions
@@ -572,25 +669,37 @@ class CyberwaveAdapter:
             source_type = SOURCE_TYPE_EDGE
 
         try:
-            if getattr(self, '_cw', None) is not None and hasattr(self._cw, 'mqtt') and callable(getattr(self._cw.mqtt, 'update_joints_state', None)):
-                return self._cw.mqtt.update_joints_state(twin_uuid, joint_positions, source_type=source_type)
+            if (
+                getattr(self, "_cw", None) is not None
+                and hasattr(self._cw, "mqtt")
+                and callable(getattr(self._cw.mqtt, "update_joints_state", None))
+            ):
+                return self._cw.mqtt.update_joints_state(
+                    twin_uuid, joint_positions, source_type=source_type
+                )
         except Exception:
-            self._logger.debug('SDK update_joints_state failed, falling back to publish')
+            self._logger.debug(
+                "SDK update_joints_state failed, falling back to publish"
+            )
 
         # Fallback: construct payload and publish to standard update topic
         topic = f"{self.topic_prefix}cyberwave/joint/{twin_uuid}/update"
         message = {
             "source_type": source_type,
             **joint_positions,
-            'timestamp': time.time(),
+            "timestamp": time.time(),
         }
         return self.publish(topic, message)
 
-    def subscribe_twin_joint_states(self, twin_uuid: str, on_update: Optional[Callable] = None) -> Any:
+    def subscribe_twin_joint_states(
+        self, twin_uuid: str, on_update: Optional[Callable] = None
+    ) -> Any:
         topic = f"{getattr(self, 'topic_prefix', '')}cyberwave/joint/{twin_uuid}/update"
         return self.subscribe(topic, on_update)
 
-    def subscribe_twin(self, twin_uuid: str, on_update: Optional[Callable] = None) -> Any:
+    def subscribe_twin(
+        self, twin_uuid: str, on_update: Optional[Callable] = None
+    ) -> Any:
         topic = f"{getattr(self, 'topic_prefix', '')}cyberwave/twin/{twin_uuid}/+"
         return self.subscribe(topic, on_update)
 

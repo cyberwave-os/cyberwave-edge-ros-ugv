@@ -85,7 +85,7 @@ class CyberwaveAdapter:
                 )
             
             self._logger.debug(f"Initializing Cyberwave client for broker {broker}:{port}")
-            cw = Cyberwave(token=api_token, mqtt_host=broker, mqtt_port=port)
+            cw = Cyberwave(api_key=api_token, mqtt_host=broker, mqtt_port=port)
 
             # store factory instance for passthroughs and keep topic prefix
             self._cw = cw

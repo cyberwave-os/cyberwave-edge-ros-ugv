@@ -32,9 +32,9 @@ def generate_launch_description():
     ugv_vision_dir = get_package_share_directory('ugv_vision')
     ugv_description_dir = get_package_share_directory('ugv_description')
     mqtt_bridge_dir = get_package_share_directory('mqtt_bridge')
-    ldlidar_dir = get_package_share_directory('ldlidar')
     
     # Check for optional packages
+    has_ldlidar = package_available('ldlidar')
     has_joint_state_publisher = package_available('joint_state_publisher')
     has_usb_cam = package_available('usb_cam')
     has_image_proc = package_available('image_proc')
@@ -107,14 +107,16 @@ def generate_launch_description():
         ]
     )
 
-    # 4. Lidar Driver
-    # Includes the dedicated lidar launch file
-    laser_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(ldlidar_dir, 'launch', 'ldlidar.launch.py')
-        ),
-        condition=IfCondition(LaunchConfiguration('use_lidar'))
-    )
+    # 4. Lidar Driver (optional — only if ldlidar package is installed)
+    laser_launch = None
+    if has_ldlidar:
+        ldlidar_dir = get_package_share_directory('ldlidar')
+        laser_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(ldlidar_dir, 'launch', 'ldlidar.launch.py')
+            ),
+            condition=IfCondition(LaunchConfiguration('use_lidar'))
+        )
 
     # 5. Robot Description & Transforms
     # Publishes the 3D model and static transforms
@@ -252,13 +254,15 @@ def generate_launch_description():
         use_camera_arg,
         use_joint_state_pub_arg,
         bringup_node,
-        laser_launch,
         robot_state_publisher_node,
         joint_state_publisher_node,
         base_node,
         mqtt_bridge_node,
         camera_node,
     ])
+    
+    if laser_launch is not None:
+        ld.add_action(laser_launch)
     
     # Add image processing nodes only if available
     if image_processing_container is not None:

@@ -20,10 +20,12 @@ set -e
 if [ -n "$CYBERWAVE_TWIN_JSON_FILE" ] && [ -f "$CYBERWAVE_TWIN_JSON_FILE" ]; then
     echo "[entrypoint] Reading twin config from $CYBERWAVE_TWIN_JSON_FILE"
     eval "$(python3 -c "
-import json, os, shlex
+import json, os, re, shlex
 
 with open(os.environ['CYBERWAVE_TWIN_JSON_FILE']) as f:
     data = json.load(f)
+
+_VALID_ENV_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 def export_vars(data, prefix='CYBERWAVE'):
     for key, value in data.items():
@@ -31,6 +33,8 @@ def export_vars(data, prefix='CYBERWAVE'):
             env_name = 'CYBERWAVE_TWIN_UUID'
         else:
             env_name = prefix + '_' + key.upper()
+        if not _VALID_ENV_NAME.match(env_name):
+            continue
         if env_name in os.environ:
             continue
         if isinstance(value, dict):

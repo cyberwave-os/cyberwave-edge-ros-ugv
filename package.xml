@@ -1,7 +1,7 @@
-<?xml version="1.1"?>
+<?xml version="1.2"?>
 <package format="3">
   <name>cyberwave_edge_ros</name>
-  <version>0.1.1</version>
+  <version>0.1.2</version>
   <description>ROS2 MQTT bridge for Cyberwave digital twin platform</description>
   <maintainer email="info@cyberwave.com">Cyberwave</maintainer>
   <license>Apache-2.0</license>

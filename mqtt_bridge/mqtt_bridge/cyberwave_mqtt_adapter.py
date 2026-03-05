@@ -106,12 +106,12 @@ class CyberwaveAdapter:
 
         # Initialize the high-level factory. The SDK requires a valid API token.
         # The token should be provided via the api_token parameter (from ROS params
-        # or CYBERWAVE_TOKEN environment variable).
+        # or CYBERWAVE_API_KEY environment variable).
         try:
             if not api_token:
                 raise RuntimeError(
                     "Cyberwave SDK requires an API token. Set 'cyberwave_token' in params.yaml "
-                    "or export CYBERWAVE_TOKEN environment variable."
+                    "or export CYBERWAVE_API_KEY environment variable."
                 )
 
             self._logger.info(

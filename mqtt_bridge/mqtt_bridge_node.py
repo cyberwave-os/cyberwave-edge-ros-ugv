@@ -3083,19 +3083,13 @@ class MQTTBridgeNode(Node):
             self.get_logger().error(f"Error in tool IO callback: {e}")
 
     def _maybe_auto_start_webrtc(self) -> None:
-        """Initialize WebRTC infrastructure for SDK Twin API command handling.
+        """Auto-start WebRTC camera stream once prerequisites are met.
 
-        This uses the Cyberwave SDK Twin API which handles start_video/stop_video
-        commands through SDK's internal mechanism, avoiding "Unknown command type" warnings
-        for non-video commands (move_forward, turn_left, etc.).
-
-        The SDK Twin object (self._sdk_twin) is initialized during __init__ and provides:
-        - twin.start_streaming() - Start WebRTC when commanded
-        - twin.stop_streaming() - Stop WebRTC
-        - twin.stream_video_background() - Non-blocking streaming
-
-        This method just verifies the infrastructure is ready. Actual streaming
-        starts when start_camera_stream() is called (triggered by start_video commands).
+        Checks that the ROSCameraStreamer, MQTT adapter, and twin_uuid are
+        all available, then proactively calls start_camera_stream().  If any
+        prerequisite is missing, a retry is scheduled.  If the WebRTC
+        handshake fails (e.g. no backend listening), start_camera_stream's
+        built-in retry mechanism will reschedule automatically.
         """
         if self._auto_start_timer is not None:
             try:

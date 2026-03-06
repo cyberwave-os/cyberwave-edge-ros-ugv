@@ -286,6 +286,27 @@ class MQTTBridgeNode(Node):
                         ros_params = raw["/mqtt_bridge_node"]["ros__parameters"]
                         bridge = ros_params.get("bridge", {}) or {}
 
+                        # Also read broker settings from YAML as fallback.
+                        # ROS2 params may not be loaded if --params-file
+                        # isn't passed at launch (e.g. when started by edge core).
+                        yaml_broker = ros_params.get("broker", {}) or {}
+                        if yaml_broker.get("host") and not host_param:
+                            host = yaml_broker["host"]
+                            self.get_logger().info(
+                                f"Broker host from YAML config: {host}"
+                            )
+                        if yaml_broker.get("port") is not None and port_param is None:
+                            try:
+                                port = int(yaml_broker["port"])
+                            except (ValueError, TypeError):
+                                pass
+                        yaml_user = yaml_broker.get("username")
+                        yaml_pass = yaml_broker.get("password")
+                        if yaml_user and not username:
+                            username = yaml_user
+                        if yaml_pass and not password:
+                            password = yaml_pass
+
                         ros2mqtt_topics = bridge.get("ros2mqtt", {}).get(
                             "ros_topics", []
                         )
@@ -3135,11 +3156,9 @@ class MQTTBridgeNode(Node):
 
         try:
             self.get_logger().info(
-                "WebRTC infrastructure ready. SDK Twin API will handle start_video commands. "
-                f"Twin UUID: {twin_uuid}"
+                f"WebRTC prerequisites met — auto-starting camera stream for twin {twin_uuid}"
             )
-            # Infrastructure is ready - video commands will be handled by start_camera_stream()
-            # which uses SDK Twin API methods to establish WebRTC connections
+            self.start_camera_stream()
         except Exception as e:
             self.get_logger().error(f"WebRTC auto-start failed: {e}")
             self._schedule_auto_start_retry()

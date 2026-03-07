@@ -151,11 +151,18 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     vizanti_demos \
     vizanti_msgs \
     vizanti_server \
-    ugv_base_node \
     ugv_interface \
     --parallel-workers 2 \
     --executor sequential \
     --continue-on-error || true"
+
+# Build ugv_base_node separately - critical for odometry
+RUN bash -c "source /opt/ros/humble/setup.bash && \
+    cd /home/ws/ugv_ws && \
+    echo '=== Building ugv_base_node (odometry calculator) ===' && \
+    colcon build --packages-select ugv_base_node --parallel-workers 2 && \
+    echo '=== ugv_base_node built successfully ===' || \
+    echo 'WARNING: ugv_base_node failed to build - will retry at container startup'"
 
 # ============================================================================
 # STAGE 7: Build ROS2 Workspace - Second Pass (Main UGV packages)

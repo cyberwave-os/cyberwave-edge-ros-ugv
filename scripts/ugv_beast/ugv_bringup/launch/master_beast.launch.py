@@ -38,6 +38,7 @@ def generate_launch_description():
     has_joint_state_publisher = package_available('joint_state_publisher')
     has_usb_cam = package_available('usb_cam')
     has_image_proc = package_available('image_proc')
+    has_ugv_base_node = package_available('ugv_base_node')
     
     # Configuration paths
     mqtt_config_path = os.path.join(mqtt_bridge_dir, 'config', 'params.yaml')
@@ -87,6 +88,12 @@ def generate_launch_description():
         'use_joint_state_publisher',
         default_value='true' if has_joint_state_publisher else 'false',
         description='Whether to start the joint_state_publisher (requires joint_state_publisher package)'
+    )
+
+    use_base_node_arg = DeclareLaunchArgument(
+        'use_base_node',
+        default_value='true' if has_ugv_base_node else 'false',
+        description='Whether to start the base_node odometry calculator (requires ugv_base_node package)'
     )
 
     # 3. Core Hardware Node (Integrated Driver)
@@ -149,12 +156,19 @@ def generate_launch_description():
         package='ugv_base_node',
         executable='base_node',
         name='base_node',
+        condition=IfCondition(LaunchConfiguration('use_base_node')),
         parameters=[{'pub_odom_tf': LaunchConfiguration('pub_odom_tf')}],
         remappings=[
             ('imu/data', '/imu/data'),
             ('odom/odom_raw', '/odom/odom_raw'),
             ('odom', '/odom')
         ]
+    )
+
+    base_node_warning = LogInfo(
+        msg='WARNING: ugv_base_node package not found - odometry will not be available. '
+            'Build ugv_base_node with: colcon build --packages-select ugv_base_node',
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('use_base_node'), "' == 'false'"]))
     )
 
     # 7. Cloud Connectivity (MQTT Bridge)
@@ -251,10 +265,12 @@ def generate_launch_description():
         debug_logs_arg,
         use_camera_arg,
         use_joint_state_pub_arg,
+        use_base_node_arg,
         bringup_node,
         laser_launch,
         robot_state_publisher_node,
         joint_state_publisher_node,
+        base_node_warning,
         base_node,
         mqtt_bridge_node,
         camera_node,

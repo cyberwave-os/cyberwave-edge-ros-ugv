@@ -1,22 +1,35 @@
-# MQTT Bridge for ROS 2 and Cyberwave
+<p align="center">
+  <a href="https://cyberwave.com">
+    <img src="https://cyberwave.com/cyberwave-logo-black.svg" alt="Cyberwave logo" width="240" />
+  </a>
+</p>
 
-A bidirectional bridge between ROS 2 topics and MQTT, with integrated support for the Cyberwave digital twin platform. This bridge enables real-time synchronization between physical robots (like the UR7e) and cloud-based digital twins.
+# Cyberwave UGV Driver (ROS 2 MQTT Bridge)
+
+This module is part of **Cyberwave: Making the physical world programmable**.
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Documentation](https://img.shields.io/badge/Documentation-docs.cyberwave.com-orange)](https://docs.cyberwave.com)
+[![Discord](https://badgen.net/badge/icon/discord?icon=discord&label&color=orange)](https://discord.gg/dfGhNrawyF)
+[![Docker Build](https://github.com/cyberwave-os/cyberwave-edge-ros-ugv/actions/workflows/push-to-docker-hub.yml/badge.svg)](https://github.com/cyberwave-os/cyberwave-edge-ros-ugv/actions/workflows/push-to-docker-hub.yml)
+
+A bidirectional bridge between ROS 2 topics and MQTT, with integrated support for the Cyberwave digital twin platform. This bridge enables real-time synchronization between physical robots and cloud-based digital twins.
 
 ## Features
 
-- ✅ **Bidirectional Communication**: ROS 2 ↔ MQTT in both directions
-- ✅ **Cyberwave SDK Integration**: Native support for Cyberwave digital twin platform
-- ✅ **Rate Limiting**: Intelligent upstream traffic control (100 Hz → 1 Hz)
-- ✅ **Joint State Mapping**: Automatic joint name transformation
-- ✅ **Configurable**: Environment variables and YAML configuration
-- ✅ **WebRTC Streaming**: Integrated ROS 2 image to WebRTC bridge (See **[WEBRTC_STREAMING.md](WEBRTC_STREAMING.md)**)
-- ✅ **Source Type Filtering**: Downstream filtering to only process `source_type: "tele"` messages (prevents accidental commands from editor/sim modes)
+- **Bidirectional communication**: ROS 2 to MQTT in both directions
+- **Cyberwave SDK integration**: Native support for Cyberwave digital twins
+- **Rate limiting**: Intelligent upstream traffic control (100 Hz to 1 Hz)
+- **Joint state mapping**: Automatic joint name transformation
+- **Configurable**: Environment variables and YAML configuration
+- **WebRTC streaming**: Integrated ROS 2 image to WebRTC bridge (see **[WEBRTC_STREAMING.md](WEBRTC_STREAMING.md)**)
+- **Source type filtering**: Downstream filtering to only process `source_type: "tele"` messages
 
 ## Quick Start
 
-- 🚀 **[UGV Beast Quickstart](README_UGV_QUICKSTART.md)**: Simple guide for UGV video streaming and teleop.
-- 🛠️ **UGV Helper Scripts**: See [UGV Beast Helper Scripts](#ugv-beast-helper-scripts) for automated startup and building.
-- ⚙️ **General Setup**: See below for detailed configuration.
+- **[UGV Beast Quickstart](README_UGV_QUICKSTART.md)**: Simple guide for UGV video streaming and teleoperation
+- **UGV helper scripts**: See [UGV Beast Helper Scripts](#ugv-beast-helper-scripts) for automated startup and building
+- **General setup**: See below for detailed configuration
 
 ### 1. Set Up Environment
 
@@ -109,7 +122,7 @@ Starting MQTT Bridge with Cyberwave SDK...
 The MQTT bridge implements downstream filtering to ensure only teleoperation commands reach the physical robot:
 
 **Downstream Filtering (MQTT → ROS)**:
-- ✅ **Processes**: Only messages with `source_type: "tele"` (from frontend live mode)
+- **Processes**: Only messages with `source_type: "tele"` (from frontend live mode)
 - ❌ **Ignores**: Messages with `source_type: "edit"`, `"sim"`, or `"edge"`
 
 **Purpose**: Prevents accidental commands from editor or simulator modes from reaching physical robots.
@@ -120,7 +133,7 @@ The MQTT bridge implements downstream filtering to ensure only teleoperation com
 
 **Implementation**: See `mqtt_bridge_node.py` → `_handle_mqtt_message()` method.
 
-📚 **See [cyberwave-backend/docs/SOURCE_TYPE_LOGIC.md](../../../cyberwave-backend/docs/SOURCE_TYPE_LOGIC.md) for complete documentation.**
+See [cyberwave-backend/docs/SOURCE_TYPE_LOGIC.md](../../../cyberwave-backend/docs/SOURCE_TYPE_LOGIC.md) for complete source type documentation.
 
 ## Data Conventions & Units
 
@@ -604,17 +617,16 @@ ROS 2 Topics                 MQTT Bridge                MQTT Broker
 
 ## Key Points
 
-✅ **Robot publishes at 100 Hz** - necessary for local control and visualization
+- **Robot publishes at 100 Hz** - necessary for local control and visualization
+- **Bridge filters to 1 Hz** - efficient for cloud monitoring
+- **Rate limit is configurable** - adjust via environment variable or config file
+- **99% bandwidth reduction** - significant cost savings
+- **1 Hz is optimal for cloud** - smooth enough for human monitoring
+- **No impact on local performance** - rate limiting only affects MQTT traffic
 
-✅ **Bridge filters to 1 Hz** - efficient for cloud monitoring
+## Contributing
 
-✅ **Rate limit is configurable** - adjust via environment variable or config file
-
-✅ **99% bandwidth reduction** - massive cost savings
-
-✅ **1 Hz is optimal for cloud** - smooth enough for human monitoring
-
-✅ **No impact on local performance** - rate limiting only affects MQTT traffic
+Contributions are welcome. Please open an issue for bugs or feature requests, and submit a pull request with improvements.
 
 ## Support
 
@@ -623,6 +635,10 @@ For issues or questions:
 2. Enable debug logging: `log_level:=debug`
 3. Review bridge logs for error messages
 4. Test with rate limiting disabled temporarily
+
+- Documentation: https://docs.cyberwave.com
+- Community (Discord): https://discord.gg/dfGhNrawyF
+- Issues: https://github.com/cyberwave-os/cyberwave-edge-ros-ugv/issues
 
 ## License
 

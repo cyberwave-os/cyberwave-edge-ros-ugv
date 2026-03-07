@@ -4,13 +4,16 @@
 #
 # Build context: project root (cyberwave-edge-ros-ugv/)
 #   docker build -t cyberwaveos/edge-ros-ugv:latest .
+#   docker build --build-arg BASE_IMAGE=cyberwaveos/pi5-ugv-base:latest \
+#     -t cyberwaveos/edge-ros-ugv:pi5 .
 #
 # Run:
 #   docker run -dit --name ugv_beast --privileged --net=host \
 #     -v /dev:/dev -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
 #     -e DISPLAY="${DISPLAY}" cyberwaveos/edge-ros-ugv:latest
 
-FROM ros:humble-ros-core-jammy
+ARG BASE_IMAGE=ros:humble-ros-core-jammy
+FROM ${BASE_IMAGE}
 
 LABEL maintainer="Cyberwave Robotics Team"
 LABEL description="Cyberwave Edge ROS UGV: ROS 2 Humble + UGV Beast workspace + MQTT Bridge"

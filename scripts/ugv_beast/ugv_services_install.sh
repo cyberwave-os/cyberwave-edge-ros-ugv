@@ -88,6 +88,38 @@ build_mqtt_bridge() {
     fi
 }
 
+# Function to build ugv_base_node (odometry calculator)
+build_ugv_base_node() {
+    echo ""
+    echo "============================================================"
+    echo "📦 BUILDING UGV BASE NODE"
+    echo "============================================================"
+    
+    cd "${WORKSPACE_PATH}"
+    source /opt/ros/humble/setup.bash
+    
+    # Check if ugv_base_node source exists
+    if [ ! -d "${WORKSPACE_PATH}/src/ugv_main/ugv_base_node" ] && \
+       [ ! -d "${WORKSPACE_PATH}/src/ugv_base_node" ]; then
+        echo "⚠️  ugv_base_node source not found, skipping build"
+        return 0
+    fi
+    
+    # Check if already installed
+    if [ -d "${WORKSPACE_PATH}/install/ugv_base_node" ]; then
+        echo "✅ ugv_base_node already installed, skipping build"
+        return 0
+    fi
+    
+    echo "● Building ugv_base_node package..."
+    if colcon build --packages-select ugv_base_node --parallel-workers 2; then
+        echo "✅ ugv_base_node built successfully"
+    else
+        echo "⚠️  Warning: ugv_base_node failed to build - odometry will not be available"
+        echo "    The UGV will still launch but without wheel odometry."
+    fi
+}
+
 # Function to build ugv_bringup if entry point was fixed
 build_ugv_bringup() {
     echo ""
@@ -322,13 +354,15 @@ main() {
     # Step 2: Build mqtt_bridge
     build_mqtt_bridge
     
-    # Step 3: Always build ugv_bringup to ensure it's properly installed
-    # (This is needed because the package might exist but not be properly registered)
+    # Step 3: Build ugv_base_node if not already installed (may have failed during Docker build)
+    build_ugv_base_node
+    
+    # Step 4: Always build ugv_bringup to ensure it's properly installed
     echo ""
     echo "● Building ugv_bringup to ensure proper installation..."
     build_ugv_bringup
     
-    # Step 4: Source the environment
+    # Step 5: Source the environment
     echo ""
     echo "● Sourcing environment..."
     source /opt/ros/humble/setup.bash
@@ -337,7 +371,7 @@ main() {
     export PATH="${WORKSPACE_PATH}/install/ugv_bringup/lib/ugv_bringup:$PATH"
     echo "✅ Environment sourced"
     
-    # Step 5: Detect environment and proceed accordingly
+    # Step 6: Detect environment and proceed accordingly
     # Check if systemd is actually functional (not just present)
     SYSTEMD_FUNCTIONAL=false
     

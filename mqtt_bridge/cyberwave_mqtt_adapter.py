@@ -44,6 +44,10 @@ try:
         from cyberwave import SOURCE_TYPE_SIM
     except ImportError:
         SOURCE_TYPE_SIM = "sim"
+    try:
+        from cyberwave import SOURCE_TYPE_SIM_TELE
+    except ImportError:
+        SOURCE_TYPE_SIM_TELE = "sim_tele"
     # These may not exist in older SDK versions (< 0.3.24)
     try:
         from cyberwave import SOURCE_TYPE_EDGE_LEADER
@@ -59,6 +63,7 @@ except ImportError:  # pragma: no cover - optional dependency
     SOURCE_TYPE_TELE = "tele"
     SOURCE_TYPE_EDIT = "edit"
     SOURCE_TYPE_SIM = "sim"
+    SOURCE_TYPE_SIM_TELE = "sim_tele"
     SOURCE_TYPE_EDGE_LEADER = "edge_leader"
     SOURCE_TYPE_EDGE_FOLLOWER = "edge_follower"
 

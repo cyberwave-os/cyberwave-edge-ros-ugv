@@ -9,12 +9,19 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 
 try:
-    from ..cyberwave_mqtt_adapter import SOURCE_TYPE_EDGE, SOURCE_TYPE_TELE, SOURCE_TYPE_EDIT, SOURCE_TYPE_SIM
+    from ..cyberwave_mqtt_adapter import (
+        SOURCE_TYPE_EDGE,
+        SOURCE_TYPE_TELE,
+        SOURCE_TYPE_EDIT,
+        SOURCE_TYPE_SIM,
+        SOURCE_TYPE_SIM_TELE,
+    )
 except Exception:
     SOURCE_TYPE_EDGE = 'edge'
     SOURCE_TYPE_TELE = 'tele'
     SOURCE_TYPE_EDIT = 'edit'
     SOURCE_TYPE_SIM = 'sim'
+    SOURCE_TYPE_SIM_TELE = 'sim_tele'
 
 
 class NavigationBridge:
@@ -99,7 +106,11 @@ class NavigationBridge:
             return
 
         source_type = data.get("source_type")
-        if source_type and source_type not in (SOURCE_TYPE_TELE, SOURCE_TYPE_EDIT, SOURCE_TYPE_SIM):
+        if source_type and source_type not in (
+            SOURCE_TYPE_TELE,
+            SOURCE_TYPE_SIM_TELE,
+            SOURCE_TYPE_EDIT,
+        ):
             self.node.get_logger().debug(
                 f"Ignoring navigation command with source_type='{source_type}'"
             )

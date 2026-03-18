@@ -1285,10 +1285,9 @@ class MQTTBridgeNode(Node):
                 return
 
             source_type = data.get("source_type") if isinstance(data, dict) else None
-            if source_type not in (SOURCE_TYPE_TELE, SOURCE_TYPE_SIM_TELE):
+            if source_type != SOURCE_TYPE_TELE:
                 self.get_logger().info(
-                    f"Ignoring joint update from {source_type} "
-                    f"(only '{SOURCE_TYPE_TELE}' or '{SOURCE_TYPE_SIM_TELE}' allowed)"
+                    f"Ignoring joint update from {source_type} (only '{SOURCE_TYPE_TELE}' allowed)"
                 )
                 return
 
@@ -2351,7 +2350,7 @@ class MQTTBridgeNode(Node):
             source_type = data.get("source_type")
 
         # Log downstream message if it comes from tele (debug level to reduce overhead)
-        if source_type in (SOURCE_TYPE_TELE, SOURCE_TYPE_SIM_TELE):
+        if source_type == SOURCE_TYPE_TELE:
             self.get_logger().debug(
                 f"Received downstream message from TELE: topic={topic}, content={payload}"
             )
@@ -2407,10 +2406,9 @@ class MQTTBridgeNode(Node):
 
             # Enforce source_type="tele" for video and camera servo commands as requested
             if command in ["start_video", "stop_video", "camera_servo"]:
-                if source_type not in (SOURCE_TYPE_TELE, SOURCE_TYPE_SIM_TELE):
+                if source_type != SOURCE_TYPE_TELE:
                     self.get_logger().warning(
-                        f"Ignoring {command} from non-tele source: {source_type} "
-                        f"(expected: {SOURCE_TYPE_TELE} or {SOURCE_TYPE_SIM_TELE})"
+                        f"Ignoring {command} from non-tele source: {source_type} (expected: {SOURCE_TYPE_TELE})"
                     )
                     return
                 else:
@@ -2535,10 +2533,10 @@ class MQTTBridgeNode(Node):
                             or msg_cls is JointTrajectory
                             or "/joint_states" in ros_topic
                         ):
-                            if source_type not in (SOURCE_TYPE_TELE, SOURCE_TYPE_SIM_TELE):
+                            if source_type != SOURCE_TYPE_TELE:
                                 self.get_logger().info(
                                     f"Ignoring joint update for {ros_topic} from {source_type} "
-                                    f"(only '{SOURCE_TYPE_TELE}' or '{SOURCE_TYPE_SIM_TELE}' allowed for actuation)"
+                                    f"(only '{SOURCE_TYPE_TELE}' allowed for actuation)"
                                 )
                                 continue
 
@@ -2991,10 +2989,9 @@ class MQTTBridgeNode(Node):
                 return
 
             source_type = data.get("source_type") if isinstance(data, dict) else None
-            if source_type not in (SOURCE_TYPE_TELE, SOURCE_TYPE_SIM_TELE):
+            if source_type != SOURCE_TYPE_TELE:
                 self.get_logger().info(
-                    f"Ignoring tool control update from {source_type} "
-                    f"(only '{SOURCE_TYPE_TELE}' or '{SOURCE_TYPE_SIM_TELE}' allowed)"
+                    f"Ignoring tool control update from {source_type} (only '{SOURCE_TYPE_TELE}' allowed)"
                 )
                 return
 

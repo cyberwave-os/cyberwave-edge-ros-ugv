@@ -144,9 +144,9 @@ class ugv_bringup_node(Node):
 
     # Callback for processing joint state updates
     def joint_states_callback(self, msg):
-        # Only process commands from teleoperation-style sources
+        # Only process commands from "tele" (teleoperation) source
         source_type = msg.header.frame_id
-        if source_type not in ('tele', 'sim_tele'):
+        if source_type != 'tele':
             return
 
         name = msg.name

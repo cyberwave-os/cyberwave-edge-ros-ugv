@@ -2378,14 +2378,9 @@ class MQTTBridgeNode(Node):
         # CRITICAL FILTER: Commands must come from frontend/simulator, NEVER from edge
         # This prevents command-feedback loops where edge devices echo commands back
         if topic.endswith("/command"):
-            allowed_sources = [
-                SOURCE_TYPE_TELE,
-                SOURCE_TYPE_SIM_TELE,
-                SOURCE_TYPE_EDIT,
-            ]
-            if source_type not in allowed_sources:
+            if source_type != SOURCE_TYPE_TELE:
                 self.get_logger().debug(
-                    f"🚫 Filtered command from {source_type} (allowed: {allowed_sources})"
+                    f"🚫 Filtered command from {source_type} (allowed: {SOURCE_TYPE_TELE})"
                 )
                 return
 

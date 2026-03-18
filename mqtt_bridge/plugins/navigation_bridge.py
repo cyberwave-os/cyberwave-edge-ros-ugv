@@ -106,11 +106,7 @@ class NavigationBridge:
             return
 
         source_type = data.get("source_type")
-        if source_type and source_type not in (
-            SOURCE_TYPE_TELE,
-            SOURCE_TYPE_SIM_TELE,
-            SOURCE_TYPE_EDIT,
-        ):
+        if source_type and source_type != SOURCE_TYPE_TELE:
             self.node.get_logger().debug(
                 f"Ignoring navigation command with source_type='{source_type}'"
             )

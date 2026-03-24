@@ -31,6 +31,38 @@ A bidirectional bridge between ROS 2 topics and MQTT, with integrated support fo
 - **UGV helper scripts**: See [UGV Beast Helper Scripts](#ugv-beast-helper-scripts) for automated startup and building
 - **General setup**: See below for detailed configuration
 
+### Docker build layering (for faster SDK bumps)
+
+The Docker image now supports a reusable base stage so the slow dependency install is not repeated on every SDK bump.
+
+- Build/publish base stage once:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --target ugv_driver_base \
+  -f docker-conf/Dockerfile \
+  -t cyberwaveos/ugv-driver:base-dev \
+  --push .
+```
+
+- Build runtime image using that base:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f docker-conf/Dockerfile \
+  --build-arg UGV_DRIVER_BASE_IMAGE=cyberwaveos/ugv-driver:base-dev \
+  --build-arg CYBERWAVE_SDK_VERSION=0.3.44 \
+  -t cyberwaveos/ugv-driver:dev \
+  --push .
+```
+
+Notes:
+
+- `CYBERWAVE_SDK_VERSION` is isolated in its own layer (`runtime_base`) so SDK-only bumps avoid redoing heavy apt/WebRTC dependency layers.
+- `ugv_driver_base` includes layers through the "Install Additional System Packages" and stable Python dependency install stages.
+
 ### 1. Set Up Environment
 
 Create a `.env` file in the workspace root:

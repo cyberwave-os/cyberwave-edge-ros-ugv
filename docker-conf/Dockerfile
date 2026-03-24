@@ -21,6 +21,7 @@
 # ============================================================================
 
 ARG BASE_IMAGE=dudulrx0601/ugv_rpi_ros_humble:ugv_rpi_ros_humble
+ARG UGV_DRIVER_BASE_IMAGE=ugv_driver_base
 FROM ${BASE_IMAGE} AS ugv_driver_base
 
 LABEL maintainer="Cyberwave Robotics Team"
@@ -81,12 +82,11 @@ RUN pip3 install --no-cache-dir \
     aioice==${AIOICE_VERSION}
 
 # ============================================================================
-# STAGE 4: Runtime Image (can start from a published base)
+# STAGE 4: Runtime Base (can start from a published base)
 # ============================================================================
 # If UGV_DRIVER_BASE_IMAGE is not provided, runtime starts from the local
 # `ugv_driver_base` stage in this Dockerfile.
-ARG UGV_DRIVER_BASE_IMAGE=ugv_driver_base
-FROM ${UGV_DRIVER_BASE_IMAGE} AS runtime
+FROM ${UGV_DRIVER_BASE_IMAGE} AS runtime_base
 
 LABEL maintainer="Cyberwave Robotics Team"
 LABEL description="Cyberwave UGV Beast with MQTT Bridge Integration"
@@ -100,7 +100,17 @@ RUN pip3 install --no-cache-dir --prefer-binary \
     cyberwave==${CYBERWAVE_SDK_VERSION}
 
 # ============================================================================
-# STAGE 6: Clone UGV Workspace Repository
+# STAGE 6: Full Runtime Image
+# ============================================================================
+# This stage contains the frequently changing workspace code.
+FROM runtime_base AS runtime
+
+LABEL maintainer="Cyberwave Robotics Team"
+LABEL description="Cyberwave UGV Beast with MQTT Bridge Integration"
+LABEL version="1.0"
+
+# ============================================================================
+# STAGE 7: Clone UGV Workspace Repository
 # ============================================================================
 
 # Create workspace directory
@@ -121,7 +131,7 @@ RUN bash -c " \
 WORKDIR /home/ws/ugv_ws
 
 # ============================================================================
-# STAGE 7: Copy MQTT Bridge Integration
+# STAGE 8: Copy MQTT Bridge Integration
 # ============================================================================
 # Note: Build context is mqtt_bridge directory
 # Excludes docker-conf/, docs/, .env, README.md via .dockerignore
@@ -152,7 +162,7 @@ RUN echo "=== Verifying setup.py has ugv_integrated_driver ===" && \
     (echo "ERROR: ugv_integrated_driver not found in setup.py" && exit 1)
 
 # ============================================================================
-# STAGE 8: Build ROS2 Workspace - First Pass (Core packages)
+# STAGE 9: Build ROS2 Workspace - First Pass (Core packages)
 # ============================================================================
 # Note: teb_local_planner may fail due to g2o detection issues,
 # but the build continues with --continue-on-error
@@ -194,7 +204,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     echo 'WARNING: ugv_base_node failed to build - will retry at container startup'"
 
 # ============================================================================
-# STAGE 9: Build ROS2 Workspace - Second Pass (Main UGV packages)
+# STAGE 10: Build ROS2 Workspace - Second Pass (Main UGV packages)
 # ============================================================================
 
 RUN bash -c "source /opt/ros/humble/setup.bash && \
@@ -215,7 +225,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     --continue-on-error"
 
 # ============================================================================
-# STAGE 10: Build MQTT Bridge Package
+# STAGE 11: Build MQTT Bridge Package
 # ============================================================================
 
 RUN bash -c "source /opt/ros/humble/setup.bash && \
@@ -225,14 +235,14 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     fi"
 
 # ============================================================================
-# STAGE 11: Set Permissions and Make Scripts Executable
+# STAGE 12: Set Permissions and Make Scripts Executable
 # ============================================================================
 
 RUN chmod +x /home/ws/ugv_ws/*.sh 2>/dev/null || true && \
     chmod +x /home/ws/ugv_ws/src/ugv_else/ldlidar/scripts/*.sh 2>/dev/null || true
 
 # ============================================================================
-# STAGE 12: Cleanup
+# STAGE 13: Cleanup
 # ============================================================================
 
 # Clean up build artifacts to reduce image size

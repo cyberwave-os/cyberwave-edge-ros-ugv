@@ -73,8 +73,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install stable heavy dependencies first.
 # Pinning avoids pip resolver backtracking (e.g., av 17 -> 16 downgrade).
-RUN pip3 install --no-cache-dir \
-    --prefer-binary \
+# Some base images (e.g., Debian Bookworm on Pi5) enforce PEP 668 and require
+# --break-system-packages. Keep a fallback path for older pip versions.
+RUN pip3 install --no-cache-dir --prefer-binary --break-system-packages \
+    pydantic==${PYDANTIC_VERSION} \
+    flask==${FLASK_VERSION} \
+    av==${AV_VERSION} \
+    aiortc==${AIORTC_VERSION} \
+    aioice==${AIOICE_VERSION} \
+    || pip3 install --no-cache-dir --prefer-binary \
     pydantic==${PYDANTIC_VERSION} \
     flask==${FLASK_VERSION} \
     av==${AV_VERSION} \
@@ -96,7 +103,9 @@ LABEL version="1.0"
 # STAGE 5: Install Cyberwave SDK (fast-changing layer)
 # ============================================================================
 ARG CYBERWAVE_SDK_VERSION=0.3.44
-RUN pip3 install --no-cache-dir --prefer-binary \
+RUN pip3 install --no-cache-dir --prefer-binary --break-system-packages \
+    cyberwave==${CYBERWAVE_SDK_VERSION} \
+    || pip3 install --no-cache-dir --prefer-binary \
     cyberwave==${CYBERWAVE_SDK_VERSION}
 
 # ============================================================================

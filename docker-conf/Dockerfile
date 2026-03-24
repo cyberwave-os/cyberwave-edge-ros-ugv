@@ -66,6 +66,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Cleanup
     && rm -rf /var/lib/apt/lists/*
 
+# Some base images may not expose ROS via /opt/ros/humble/setup.bash.
+# Create a compatibility shim so existing scripts/commands keep working.
+RUN bash -c "if [ ! -f /opt/ros/humble/setup.bash ]; then \
+    ros_setup=\$(ls -1 /opt/ros/*/setup.bash 2>/dev/null | sed -n '1p'); \
+    if [ -n \"\$ros_setup\" ]; then \
+    mkdir -p /opt/ros/humble && \
+    printf '%s\n' '#!/bin/bash' \"source \\\"\$ros_setup\\\"\" > /opt/ros/humble/setup.bash && \
+    chmod +x /opt/ros/humble/setup.bash; \
+    else \
+    echo 'WARNING: no ROS setup.bash found under /opt/ros'; \
+    fi; \
+    fi"
+
 # ============================================================================
 # STAGE 3: Install Python Dependencies (only what's missing)
 # ============================================================================
@@ -118,6 +131,21 @@ LABEL maintainer="Cyberwave Robotics Team"
 LABEL description="Cyberwave UGV Beast with MQTT Bridge Integration"
 LABEL version="1.0"
 
+# Source ROS setup from whichever path is present in the base image.
+# This keeps compatibility with both classic ROS images and Pi5 base variants.
+RUN printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'for setup in /opt/ros/humble/setup.bash /opt/ros/jazzy/setup.bash /opt/ros/*/setup.bash /home/ws/ugv_ws/install/setup.bash; do' \
+    '  if [ -f "$setup" ]; then' \
+    '    # shellcheck disable=SC1090' \
+    '    source "$setup"' \
+    '    return 0 2>/dev/null || exit 0' \
+    '  fi' \
+    'done' \
+    'echo "ERROR: ROS setup.bash not found under /opt/ros or /home/ws/ugv_ws/install." >&2' \
+    'return 1 2>/dev/null || exit 1' \
+    > /usr/local/bin/source_ros_setup.sh && chmod +x /usr/local/bin/source_ros_setup.sh
+
 # ============================================================================
 # STAGE 7: Clone UGV Workspace Repository
 # ============================================================================
@@ -127,14 +155,22 @@ RUN mkdir -p /home/ws
 
 WORKDIR /home/ws
 
-# Clone ugv_ws repository (ros2-humble-develop branch) with retries
+# Clone ugv_ws repository (ros2-humble-develop branch) with retries.
+# If the base image already provides /home/ws/ugv_ws, reuse it.
 RUN bash -c " \
+    if [ -d /home/ws/ugv_ws/src/ugv_main ] || [ -d /home/ws/ugv_ws/.git ]; then \
+    echo 'Using existing /home/ws/ugv_ws from base image'; \
+    else \
+    if [ -d /home/ws/ugv_ws ]; then rm -rf /home/ws/ugv_ws; fi; \
+    clone_ok=0; \
     for i in {1..5}; do \
-    git clone -b ros2-humble-develop https://github.com/DUDULRX/ugv_ws.git && break || { \
+    git clone -b ros2-humble-develop https://github.com/DUDULRX/ugv_ws.git /home/ws/ugv_ws && clone_ok=1 && break || { \
     echo 'Clone attempt '\$i' failed, retrying in 10 seconds...'; \
     sleep 10; \
     }; \
-    done"
+    done; \
+    [ \"\$clone_ok\" -eq 1 ] || { echo 'ERROR: failed to clone ugv_ws after 5 attempts'; exit 1; }; \
+    fi"
 
 # Set working directory to ugv_ws
 WORKDIR /home/ws/ugv_ws
@@ -176,7 +212,7 @@ RUN echo "=== Verifying setup.py has ugv_integrated_driver ===" && \
 # Note: teb_local_planner may fail due to g2o detection issues,
 # but the build continues with --continue-on-error
 
-RUN bash -c "source /opt/ros/humble/setup.bash && \
+RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     cd /home/ws/ugv_ws && \
     colcon build --packages-select \
     apriltag \
@@ -205,7 +241,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     --continue-on-error || true"
 
 # Build ugv_base_node separately - critical for odometry
-RUN bash -c "source /opt/ros/humble/setup.bash && \
+RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     cd /home/ws/ugv_ws && \
     echo '=== Building ugv_base_node (odometry calculator) ===' && \
     colcon build --packages-select ugv_base_node --parallel-workers 2 && \
@@ -216,7 +252,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
 # STAGE 10: Build ROS2 Workspace - Second Pass (Main UGV packages)
 # ============================================================================
 
-RUN bash -c "source /opt/ros/humble/setup.bash && \
+RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     cd /home/ws/ugv_ws && \
     colcon build --packages-select \
     ugv_bringup \
@@ -237,7 +273,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
 # STAGE 11: Build MQTT Bridge Package
 # ============================================================================
 
-RUN bash -c "source /opt/ros/humble/setup.bash && \
+RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     cd /home/ws/ugv_ws && \
     if [ -f src/mqtt_bridge/setup.py ]; then \
     colcon build --packages-select mqtt_bridge --symlink-install; \
@@ -277,7 +313,7 @@ WORKDIR /home/ws/ugv_ws
 EXPOSE 11311 11345
 
 # Clean-build mqtt_bridge with Release flags using the project script
-RUN bash -c "source /opt/ros/humble/setup.bash && \
+RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     cd /home/ws/ugv_ws && \
     bash src/mqtt_bridge/scripts/ugv_beast/clean_build_mqtt.sh --logs"
 

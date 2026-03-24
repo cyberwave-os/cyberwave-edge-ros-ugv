@@ -15,17 +15,25 @@
 #   - SSH configured: Port 23, PermitRootLogin yes
 #   - ROS2 sourced in bashrc
 #
-# Build from cyberwave-edge-nodes/cyberwave-ros2/mqtt_bridge:
-#   docker build -f docker-conf/Dockerfile -t cyberwaveos/cyb_ugv_beast:latest .
+# Build from cyberwave-edge-nodes/cyberwave-edge-ros-ugv:
+#   docker build -f docker-conf/Dockerfile -t cyberwaveos/ugv-driver:latest .
 #
 # ============================================================================
 
 ARG BASE_IMAGE=dudulrx0601/ugv_rpi_ros_humble:ugv_rpi_ros_humble
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS ugv_driver_base
 
 LABEL maintainer="Cyberwave Robotics Team"
 LABEL description="Cyberwave UGV Beast with MQTT Bridge Integration"
 LABEL version="1.0"
+
+# Keep stable dependency versions in build args so this stage can be
+# built/pushed once and reused across later image builds.
+ARG PYDANTIC_VERSION=2.12.5
+ARG FLASK_VERSION=3.0.3
+ARG AV_VERSION=16.1.0
+ARG AIORTC_VERSION=1.14.0
+ARG AIOICE_VERSION=0.10.2
 
 # ============================================================================
 # STAGE 1: Fix ROS GPG Key (expired key issue)
@@ -62,16 +70,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ============================================================================
 # Base image already has: pyserial, mediapipe, requests
 
+# Install stable heavy dependencies first.
+# Pinning avoids pip resolver backtracking (e.g., av 17 -> 16 downgrade).
 RUN pip3 install --no-cache-dir \
-    cyberwave==0.3.44 \
-    pydantic==2.12.5 \
-    flask \
-    av \
-    aiortc \
-    aioice
+    --prefer-binary \
+    pydantic==${PYDANTIC_VERSION} \
+    flask==${FLASK_VERSION} \
+    av==${AV_VERSION} \
+    aiortc==${AIORTC_VERSION} \
+    aioice==${AIOICE_VERSION}
 
 # ============================================================================
-# STAGE 4: Clone UGV Workspace Repository
+# STAGE 4: Runtime Image (can start from a published base)
+# ============================================================================
+# If UGV_DRIVER_BASE_IMAGE is not provided, runtime starts from the local
+# `ugv_driver_base` stage in this Dockerfile.
+ARG UGV_DRIVER_BASE_IMAGE=ugv_driver_base
+FROM ${UGV_DRIVER_BASE_IMAGE} AS runtime
+
+LABEL maintainer="Cyberwave Robotics Team"
+LABEL description="Cyberwave UGV Beast with MQTT Bridge Integration"
+LABEL version="1.0"
+
+# ============================================================================
+# STAGE 5: Install Cyberwave SDK (fast-changing layer)
+# ============================================================================
+ARG CYBERWAVE_SDK_VERSION=0.3.44
+RUN pip3 install --no-cache-dir --prefer-binary \
+    cyberwave==${CYBERWAVE_SDK_VERSION}
+
+# ============================================================================
+# STAGE 6: Clone UGV Workspace Repository
 # ============================================================================
 
 # Create workspace directory
@@ -92,7 +121,7 @@ RUN bash -c " \
 WORKDIR /home/ws/ugv_ws
 
 # ============================================================================
-# STAGE 5: Copy MQTT Bridge Integration
+# STAGE 7: Copy MQTT Bridge Integration
 # ============================================================================
 # Note: Build context is mqtt_bridge directory
 # Excludes docker-conf/, docs/, .env, README.md via .dockerignore
@@ -123,7 +152,7 @@ RUN echo "=== Verifying setup.py has ugv_integrated_driver ===" && \
     (echo "ERROR: ugv_integrated_driver not found in setup.py" && exit 1)
 
 # ============================================================================
-# STAGE 6: Build ROS2 Workspace - First Pass (Core packages)
+# STAGE 8: Build ROS2 Workspace - First Pass (Core packages)
 # ============================================================================
 # Note: teb_local_planner may fail due to g2o detection issues,
 # but the build continues with --continue-on-error
@@ -165,7 +194,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     echo 'WARNING: ugv_base_node failed to build - will retry at container startup'"
 
 # ============================================================================
-# STAGE 7: Build ROS2 Workspace - Second Pass (Main UGV packages)
+# STAGE 9: Build ROS2 Workspace - Second Pass (Main UGV packages)
 # ============================================================================
 
 RUN bash -c "source /opt/ros/humble/setup.bash && \
@@ -186,7 +215,7 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     --continue-on-error"
 
 # ============================================================================
-# STAGE 8: Build MQTT Bridge Package
+# STAGE 10: Build MQTT Bridge Package
 # ============================================================================
 
 RUN bash -c "source /opt/ros/humble/setup.bash && \
@@ -196,14 +225,14 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     fi"
 
 # ============================================================================
-# STAGE 9: Set Permissions and Make Scripts Executable
+# STAGE 11: Set Permissions and Make Scripts Executable
 # ============================================================================
 
 RUN chmod +x /home/ws/ugv_ws/*.sh 2>/dev/null || true && \
     chmod +x /home/ws/ugv_ws/src/ugv_else/ldlidar/scripts/*.sh 2>/dev/null || true
 
 # ============================================================================
-# STAGE 10: Cleanup
+# STAGE 12: Cleanup
 # ============================================================================
 
 # Clean up build artifacts to reduce image size

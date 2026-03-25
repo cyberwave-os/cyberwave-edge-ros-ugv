@@ -236,7 +236,6 @@ RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     vizanti_msgs \
     vizanti_server \
     ugv_interface \
-    --parallel-workers 2 \
     --executor sequential \
     --continue-on-error || true"
 
@@ -244,7 +243,7 @@ RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
 RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     cd /home/ws/ugv_ws && \
     echo '=== Building ugv_base_node (odometry calculator) ===' && \
-    colcon build --packages-select ugv_base_node --parallel-workers 2 && \
+    colcon build --packages-select ugv_base_node && \
     echo '=== ugv_base_node built successfully ===' || \
     echo 'WARNING: ugv_base_node failed to build - will retry at container startup'"
 
@@ -265,7 +264,6 @@ RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     ugv_vision \
     ugv_web_app \
     --symlink-install \
-    --parallel-workers 2 \
     --executor sequential \
     --continue-on-error || true"
 

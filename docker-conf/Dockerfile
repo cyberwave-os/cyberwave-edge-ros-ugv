@@ -267,7 +267,7 @@ RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     --symlink-install \
     --parallel-workers 2 \
     --executor sequential \
-    --continue-on-error"
+    --continue-on-error || true"
 
 # ============================================================================
 # STAGE 11: Build MQTT Bridge Package

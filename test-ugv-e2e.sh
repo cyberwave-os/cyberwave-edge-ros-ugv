@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/cyberwave-backend"
 CLI_DIR="$REPO_ROOT/cyberwave-clis/cyberwave-python-cli"
-EDGE_CORE_DIR="$REPO_ROOT/cyberwave-edge-nodes/cyberwave-edge-core"
+EDGE_CORE_DIR="$REPO_ROOT/cyberwave-edge-core"
 SDK_DIR="$REPO_ROOT/${CYBERWAVE_SDK_REL_PATH:-cyberwave-sdks/cyberwave-python}"
 
 UGV_IMAGE="cyberwave-edge-ros-ugv"
@@ -203,7 +203,7 @@ ENV PATH="$CLI_VENV/bin:$EDGE_VENV/bin:$PATH"
 
 COPY ${CYBERWAVE_SDK_REL_PATH}/ /workspace/cyberwave-sdk/
 COPY cyberwave-clis/cyberwave-python-cli/ /workspace/cyberwave-cli/
-COPY cyberwave-edge-nodes/cyberwave-edge-core/ /workspace/cyberwave-edge-core/
+COPY cyberwave-edge-core/ /workspace/cyberwave-edge-core/
 
 # CLI venv
 RUN python -m venv "$CLI_VENV" && \

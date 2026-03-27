@@ -236,6 +236,7 @@ RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     vizanti_msgs \
     vizanti_server \
     ugv_interface \
+    --parallel-workers 1 \
     --executor sequential \
     --continue-on-error || true"
 
@@ -263,6 +264,7 @@ RUN bash -c "source /usr/local/bin/source_ros_setup.sh && \
     ugv_tools \
     ugv_vision \
     ugv_web_app \
+    --parallel-workers 1 \
     --symlink-install \
     --executor sequential \
     --continue-on-error || true"

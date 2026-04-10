@@ -289,28 +289,21 @@ class GenericActuationHandler(CommandHandler):
         }
         """
         try:
-            self.logger.info(f"[DEBUG] GenericActuationHandler.handle() called with data: {data}")
-            
             # Extract the actuation command
             actuation = data.get('command')
             if not actuation:
                 self.logger.warning("Actuation handler requires 'command' field")
                 return False
-            
+
             self.logger.info(f"Processing actuation: {actuation}")
-            
+
             # Extract additional data if present (for video commands, etc.)
             command_data = data.get('data', {})
-            
-            # Map actuation to ROS command
-            result = self._process_actuation(actuation, command_data)
-            self.logger.info(f"[DEBUG] _process_actuation returned: {result}")
-            return result
-            
+
+            return self._process_actuation(actuation, command_data)
+
         except Exception as e:
             self.logger.error(f"Failed to handle actuation: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
             return False
     
     def _process_actuation(self, actuation: str, data: Dict[str, Any] = None) -> bool:
@@ -504,26 +497,14 @@ class GenericActuationHandler(CommandHandler):
     def _send_camera_servo_reset(self) -> bool:
         """Reset camera servo to default position (0.0, 0.0)."""
         try:
-            self.logger.info("[DEBUG] _send_camera_servo_reset() called")
-            
-            # Delegate to CameraServoHandler via command registry with absolute positions
             if hasattr(self.node, '_command_registry'):
-                servo_data = {
-                    'pan': 0.0,
-                    'tilt': 0.0
-                }
-                self.logger.info(f"[DEBUG] Calling command registry with camera_servo command: {servo_data}")
-                result = self.node._command_registry.handle_command("camera_servo", servo_data)
-                self.logger.info(f"[DEBUG] camera_servo handler returned: {result}")
-                return result
-            
+                return self.node._command_registry.handle_command(
+                    "camera_servo", {'pan': 0.0, 'tilt': 0.0}
+                )
             self.logger.warning("camera_servo: command registry not available")
             return False
-            
         except Exception as e:
             self.logger.error(f"Failed to reset camera servo: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
             return False
     
     def _send_led_ctrl(self, chassis: Optional[float] = None, camera: Optional[float] = None) -> bool:
@@ -853,87 +834,139 @@ class GripperHandler(CommandHandler):
 class CameraServoHandler(CommandHandler):
     """
     Handler for UGV Beast pan-tilt camera servo control with smooth interpolation.
-    
+
     Controls the pan-tilt mechanism via joint trajectory commands.
     Pan joint: pt_base_link_to_pt_link1 (horizontal rotation)
     Tilt joint: pt_link1_to_pt_link2 (vertical movement)
+
+    After each servo movement the handler publishes the final position directly to
+    MQTT (via the Cyberwave adapter) so the digital twin reflects the new state
+    immediately, overriding any stale values published by the joint_state_publisher
+    which only knows about default (zero) positions for the servo joints.
     """
-    
+
+    _PAN_JOINT = 'pt_base_link_to_pt_link1'
+    _TILT_JOINT = 'pt_link1_to_pt_link2'
+
     def __init__(self, node: Node):
         super().__init__(node)
         # Track current servo positions
         self._pan_position = 0.0   # radians
         self._tilt_position = 0.0  # radians
-        
+
         # Servo limits (in radians)
         self._pan_min = -3.14159   # -180 degrees
         self._pan_max = 3.14159    # +180 degrees
         self._tilt_min = -0.785    # -45 degrees
         self._tilt_max = 1.57      # +90 degrees
-        
-        # Interpolation settings - optimized for fast & smooth
+
+        # Interpolation settings - optimised for fast & smooth movement
         self._interpolation_steps = 4  # Number of intermediate steps
-        self._interpolation_interval = 0.02  # seconds between steps (20ms)
+        self._interpolation_interval = 0.02  # seconds between steps (20 ms)
         self._interpolation_timer = None
+        # Snapshot of the start position when an interpolation begins
+        self._interp_start_pan = 0.0
+        self._interp_start_tilt = 0.0
         self._target_pan = 0.0
         self._target_tilt = 0.0
         self._current_step = 0
-        
+
         self.logger.info("CameraServoHandler initialized with smooth interpolation")
-    
+
     def get_command_name(self) -> str:
         return "camera_servo"
-    
+
     def _setup_publishers(self) -> None:
         # UGV Beast uses /ugv/joint_states for servo control, not trajectory controller
         self._publishers['joint_states'] = self.node.create_publisher(
             JointState, '/ugv/joint_states', 10
         )
-    
+
     def _interpolate_step(self) -> None:
-        """Execute one step of the interpolation."""
+        """Execute one step of the smooth interpolation towards the target position."""
         if self._current_step >= self._interpolation_steps:
-            # Interpolation complete
+            # Interpolation complete – snap to exact target and update persistent state
+            self._pan_position = self._target_pan
+            self._tilt_position = self._target_tilt
             if self._interpolation_timer is not None:
                 self._interpolation_timer.cancel()
                 self._interpolation_timer = None
+            # Publish final position to MQTT so the digital twin stays in sync
+            self._publish_servo_positions_to_mqtt()
             return
-        
-        # Calculate interpolation progress (0.0 to 1.0)
+
+        # Progress goes from 0.0 → 1.0 over _interpolation_steps ticks.
+        # We start at step=1 so progress ranges (1/N … N/N).
+        # Interpolate from the *snapshot* start position captured when the command
+        # arrived, not from the continuously-mutating _pan_position, to avoid the
+        # progressive-error bug where each tick's delta compounds.
         progress = self._current_step / self._interpolation_steps
-        
-        # Ease-in-out for smooth acceleration/deceleration (smoothstep function)
+
+        # Ease-in-out smoothstep for smooth acceleration/deceleration
         progress = progress * progress * (3.0 - 2.0 * progress)
-        
-        # Calculate intermediate position
-        start_pan = self._pan_position
-        start_tilt = self._tilt_position
-        
-        self._pan_position = start_pan + (self._target_pan - start_pan) * progress
-        self._tilt_position = start_tilt + (self._target_tilt - start_tilt) * progress
-        
-        # Publish intermediate position
-        self._publish_position()
-        
-        # Move to next step
+
+        self._pan_position = self._interp_start_pan + (self._target_pan - self._interp_start_pan) * progress
+        self._tilt_position = self._interp_start_tilt + (self._target_tilt - self._interp_start_tilt) * progress
+
+        # Publish intermediate position to ROS (drives the hardware)
+        self._publish_ros_position()
+
         self._current_step += 1
-    
-    def _publish_position(self) -> None:
-        """Publish current servo position to ROS topic."""
+
+    def _publish_ros_position(self) -> None:
+        """Publish current servo position to the ROS hardware topic."""
         msg = JointState()
         msg.header.stamp = self.node.get_clock().now().to_msg()
-        msg.header.frame_id = 'tele'  # CRITICAL: Must be 'tele' for ugv_integrated_driver to accept
-        msg.name = ['pt_base_link_to_pt_link1', 'pt_link1_to_pt_link2']
+        msg.header.frame_id = 'tele'  # CRITICAL: must be 'tele' for ugv_integrated_driver to accept
+        msg.name = [self._PAN_JOINT, self._TILT_JOINT]
         msg.position = [self._pan_position, self._tilt_position]
         msg.velocity = []
         msg.effort = []
-        
         self._publishers['joint_states'].publish(msg)
-    
+
+    def _publish_servo_positions_to_mqtt(self) -> None:
+        """Publish the final servo positions directly to MQTT.
+
+        The joint_state_publisher broadcasts default (zero) positions for the
+        pan-tilt joints because the hardware does not report servo feedback.
+        Those messages arrive at the MQTT bridge and overwrite the positions in
+        the digital twin.  By publishing the authoritative servo positions to
+        MQTT here we ensure the twin reflects the actual commanded state.
+        """
+        try:
+            import time
+            adapter = getattr(self.node, '_mqtt_adapter', None)
+            mapping = getattr(self.node, '_mapping', None)
+            if adapter is None or mapping is None:
+                return
+
+            twin_uuid = getattr(mapping, 'twin_uuid', None)
+            if not twin_uuid:
+                return
+
+            prefix = getattr(self.node, 'ros_prefix', '')
+            topic = f"{prefix}cyberwave/joint/{twin_uuid}/update"
+
+            payload = {
+                "source_type": "edge",
+                "positions": {
+                    self._PAN_JOINT: self._pan_position,
+                    self._TILT_JOINT: self._tilt_position,
+                },
+                "ts": time.time(),
+            }
+            import json
+            adapter.publish(topic, json.dumps(payload))
+            self.logger.debug(
+                f"Camera servo MQTT update: pan={self._pan_position:.3f}, tilt={self._tilt_position:.3f}"
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to publish servo positions to MQTT: {e}")
+
     def handle(self, data: Dict[str, Any]) -> bool:
         """
         Handle camera servo command with smooth interpolation.
-        
+
         Expected data format:
         {
             "pan_delta": 0.1,    # Optional: change in pan (radians)
@@ -943,55 +976,50 @@ class CameraServoHandler(CommandHandler):
         }
         """
         try:
-            self.logger.info(f"[DEBUG] CameraServoHandler.handle() called with data: {data}")
-            
-            # Cancel any ongoing interpolation
+            # Cancel any ongoing interpolation and snap to its current position
             if self._interpolation_timer is not None:
                 self._interpolation_timer.cancel()
                 self._interpolation_timer = None
-            
+
             # Calculate target position
             pan_delta = data.get('pan_delta', 0.0)
             tilt_delta = data.get('tilt_delta', 0.0)
-            
-            # Check if absolute positions are provided
+
             if 'pan' in data:
                 self._target_pan = float(data['pan'])
-                self.logger.info(f"[DEBUG] Setting absolute pan position: {self._target_pan}")
             else:
                 self._target_pan = self._pan_position + float(pan_delta)
-                self.logger.info(f"[DEBUG] Setting relative pan position: {self._target_pan} (delta: {pan_delta})")
-            
+
             if 'tilt' in data:
                 self._target_tilt = float(data['tilt'])
-                self.logger.info(f"[DEBUG] Setting absolute tilt position: {self._target_tilt}")
             else:
                 self._target_tilt = self._tilt_position + float(tilt_delta)
-                self.logger.info(f"[DEBUG] Setting relative tilt position: {self._target_tilt} (delta: {tilt_delta})")
-            
-            # Clamp target to limits
+
+            # Clamp target to physical limits
             self._target_pan = max(self._pan_min, min(self._pan_max, self._target_pan))
             self._target_tilt = max(self._tilt_min, min(self._tilt_max, self._target_tilt))
-            
-            # Start interpolation
-            self._current_step = 1  # Start from step 1 (0 would be current position)
-            
+
+            # Snapshot start position for correct linear interpolation
+            self._interp_start_pan = self._pan_position
+            self._interp_start_tilt = self._tilt_position
+
+            # Start interpolation from step 1 (step 0 = current position, already sent)
+            self._current_step = 1
+
             # Create timer for interpolation steps
             self._interpolation_timer = self.node.create_timer(
                 self._interpolation_interval,
                 self._interpolate_step
             )
-            
+
             self.logger.debug(
-                f"Camera servo: target pan={self._target_pan:.3f}, tilt={self._target_tilt:.3f}"
+                f"Camera servo: target pan={self._target_pan:.3f} rad, tilt={self._target_tilt:.3f} rad"
             )
-            
+
             import math
-            # Convert radians to degrees for display
             pan_deg = math.degrees(self._target_pan)
             tilt_deg = math.degrees(self._target_tilt)
-            
-            # Send confirmation response with target position (publishes to camera_servo/status)
+
             self.publish_response({
                 "status": "success",
                 "pan": self._target_pan,
@@ -999,10 +1027,10 @@ class CameraServoHandler(CommandHandler):
                 "pan_degrees": round(pan_deg, 1),
                 "tilt_degrees": round(tilt_deg, 1),
                 "pan_radians": round(self._target_pan, 3),
-                "tilt_radians": round(self._target_tilt, 3)
+                "tilt_radians": round(self._target_tilt, 3),
             })
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Failed to handle camera servo: {e}")
             return False

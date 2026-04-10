@@ -3,7 +3,6 @@ import fractions
 import time
 import threading
 from typing import Optional, Any, Dict
-from contextlib import contextmanager
 import logging
 
 import cv2
@@ -22,11 +21,11 @@ logger = logging.getLogger(__name__)
 class RelayOnlyRTCIceGatherer(RTCIceGatherer):
     """
     Custom RTCIceGatherer that forces TURN relay-only mode.
-    
+
     This is needed because aiortc's RTCConfiguration doesn't support iceTransportPolicy,
     but the underlying aioice.Connection does support transport_policy.
     """
-    
+
     def __init__(
         self,
         iceServers=None,
@@ -35,32 +34,32 @@ class RelayOnlyRTCIceGatherer(RTCIceGatherer):
     ) -> None:
         from pyee.asyncio import AsyncIOEventEmitter
         AsyncIOEventEmitter.__init__(self)
-        
+
         if iceServers is None:
             iceServers = self.getDefaultIceServers()
         ice_kwargs = connection_kwargs(iceServers)
-        
+
         # Force RELAY mode
         ice_kwargs['transport_policy'] = TransportPolicy.RELAY
         logger.info("ICE transport policy set to RELAY (force_turn enabled)")
-        
+
         self._connection = Connection(ice_controlling=False, **ice_kwargs)
         self._remote_candidates_end = False
         self._RTCIceGatherer__state = "new"
 
 
-@contextmanager
-def relay_only_ice_mode():
-    """Context manager to temporarily enable relay-only ICE mode."""
+def enable_relay_only_ice_mode() -> None:
+    """Permanently patch aiortc to use relay-only ICE mode for this process.
+
+    Unlike a context manager, this patch persists across WebRTC reconnections so
+    every peer connection created after this call (including auto-reconnect attempts)
+    will use TURN relay-only transport.  Call this once during streamer initialisation
+    when force_relay=True.
+    """
     import aiortc.rtcpeerconnection as rtcpc
-    
-    original_gatherer = rtcpc.RTCIceGatherer
-    try:
+    if rtcpc.RTCIceGatherer is not RelayOnlyRTCIceGatherer:
         rtcpc.RTCIceGatherer = RelayOnlyRTCIceGatherer
-        logger.info("Enabled relay-only ICE mode")
-        yield
-    finally:
-        rtcpc.RTCIceGatherer = original_gatherer
+        logger.info("Permanently enabled relay-only ICE mode (force_turn)")
 
 
 class ROSVideoStreamTrack(BaseVideoTrack):
@@ -240,22 +239,30 @@ class ROSVideoStreamTrack(BaseVideoTrack):
 class ROSCameraStreamer(BaseVideoStreamer):
     """
     Uses SDK's BaseVideoStreamer with ROS image source.
-    
+
     Args:
         node: ROS 2 node instance
         client: MQTT client for signaling
         force_relay: If True, forces all WebRTC traffic through TURN relay servers.
-                    This bypasses NAT/firewall issues but adds latency.
+                    This bypasses NAT/firewall issues but adds latency.  The relay
+                    patch is applied permanently (process-wide) so it survives
+                    auto-reconnect cycles.
     """
     def __init__(self, node: Node, client: Any, *args, **kwargs):
         self.fps = kwargs.pop('fps', 30)
         kwargs.pop('time_reference', None)
         # Extract force_relay before passing to parent (parent doesn't know about it)
         self.force_relay = kwargs.pop('force_relay', False)
-        
+
+        # Apply the relay-only ICE patch before the parent creates any peer connection.
+        # Using a permanent patch (not a context manager) ensures every future
+        # reconnect attempt also uses relay-only transport.
+        if self.force_relay:
+            enable_relay_only_ice_mode()
+
         super().__init__(client, *args, **kwargs)
         self.node = node
-        
+
         # Get camera settings from robot mapping (preferred) or fall back to defaults
         if hasattr(self.node, '_mapping') and self.node._mapping:
             camera_config = self.node._mapping.raw.get('camera', {})
@@ -273,24 +280,24 @@ class ROSCameraStreamer(BaseVideoStreamer):
             return self.streamer
         self.streamer = ROSVideoStreamTrack(self.node, self.image_topic, self.fps)
         return self.streamer
-    
+
     async def start(self, *args, **kwargs):
         """
         Start the WebRTC camera stream.
-        
+
         Waits for frames to be available before starting WebRTC to avoid
         'Timeout waiting for first frame' warnings.
         """
         # Ensure track is initialized
         if self.streamer is None:
             self.initialize_track()
-        
+
         # Wait for frames to be ready (up to 10 seconds)
         self.node.get_logger().info("Waiting for camera frames before starting WebRTC...")
         frame_ready = await asyncio.get_event_loop().run_in_executor(
             None, self.streamer.wait_for_frames, 10.0
         )
-        
+
         if frame_ready:
             self.node.get_logger().info(
                 f"Camera frames ready! Starting WebRTC with {self.streamer._frames_received} cached frames"
@@ -299,183 +306,8 @@ class ROSCameraStreamer(BaseVideoStreamer):
             self.node.get_logger().warning(
                 "No camera frames after 10s wait. Starting WebRTC anyway (will send blank frames)"
             )
-        
-        # Now start the parent's WebRTC setup
-        return await super().start(*args, **kwargs)
 
-    async def _setup_webrtc(self):
-        """
-        Initialize WebRTC peer connection with optional relay-only mode.
-        
-        When force_relay is True, patches aiortc to use only TURN relay candidates,
-        bypassing NAT/firewall issues.
-        """
-        self.node.get_logger().info(f"_setup_webrtc called, force_relay={self.force_relay}")
-        if self.force_relay:
-            self.node.get_logger().info(
-                "Setting up WebRTC with RELAY-ONLY transport policy (force_turn enabled)"
-            )
-            with relay_only_ice_mode():
-                self.node.get_logger().info("Inside relay_only_ice_mode context, calling super()._setup_webrtc()")
-                await super()._setup_webrtc()
-                self.node.get_logger().info("Exited relay_only_ice_mode context")
-        else:
-            self.node.get_logger().info("Setting up WebRTC with normal ICE (force_turn disabled)")
-            await super()._setup_webrtc()
-    
-    def _send_offer(self, sdp: str):
-        """Override to add diagnostic logging for WebRTC offer."""
-        import time
-        prefix = self.client.topic_prefix
-        offer_topic = f"{prefix}cyberwave/twin/{self.twin_uuid}/webrtc-offer"
-        
-        # Log the offer details
-        sdp_lines = sdp.split('\r\n') if sdp else []
-        self.node.get_logger().info(f"=== WebRTC OFFER BEING SENT ===")
-        self.node.get_logger().info(f"  Topic: {offer_topic}")
-        self.node.get_logger().info(f"  SDP lines: {len(sdp_lines)}")
-        
-        # Check for TURN relay candidates in SDP
-        relay_candidates = [l for l in sdp_lines if 'relay' in l.lower()]
-        host_candidates = [l for l in sdp_lines if 'a=candidate' in l and 'host' in l.lower()]
-        srflx_candidates = [l for l in sdp_lines if 'a=candidate' in l and 'srflx' in l.lower()]
-        
-        self.node.get_logger().info(f"  ICE candidates: relay={len(relay_candidates)}, host={len(host_candidates)}, srflx={len(srflx_candidates)}")
-        
-        if relay_candidates:
-            for c in relay_candidates[:3]:  # Log first 3 relay candidates
-                self.node.get_logger().info(f"  RELAY: {c[:100]}...")
-        else:
-            self.node.get_logger().warning("  WARNING: No relay candidates in offer - TURN may not be working!")
-        
-        # Call parent implementation
-        super()._send_offer(sdp)
-        self.node.get_logger().info(f"=== WebRTC OFFER SENT ===")
-    
-    def _subscribe_to_answer(self):
-        """Override to add diagnostic logging for WebRTC answer subscription."""
-        import json
-        
-        if not self.twin_uuid:
-            raise ValueError("twin_uuid must be set before subscribing")
-        
-        prefix = self.client.topic_prefix
-        answer_topic = f"{prefix}cyberwave/twin/{self.twin_uuid}/webrtc-answer"
-        candidate_topic = f"{prefix}cyberwave/twin/{self.twin_uuid}/webrtc-candidate"
-        
-        self.node.get_logger().info(f"=== SUBSCRIBING TO WEBRTC SIGNALING ===")
-        self.node.get_logger().info(f"  Answer topic: {answer_topic}")
-        self.node.get_logger().info(f"  Candidate topic: {candidate_topic}")
-        
-        # Create a wrapper callback that logs all incoming messages
-        original_on_answer = None
-        
-        def logging_on_answer(data):
-            try:
-                payload = data if isinstance(data, dict) else json.loads(data)
-                msg_type = payload.get('type', 'unknown')
-                target = payload.get('target', 'unknown')
-                sender = payload.get('sender', 'unknown')
-                sensor = payload.get('sensor') or payload.get('camera', 'unknown')
-                
-                self.node.get_logger().info(
-                    f"=== WEBRTC MESSAGE RECEIVED ==="
-                )
-                self.node.get_logger().info(
-                    f"  type={msg_type}, target={target}, sender={sender}, sensor={sensor}"
-                )
-                
-                if msg_type == 'answer':
-                    sdp = payload.get('sdp', '')
-                    sdp_lines = sdp.split('\r\n') if sdp else []
-                    self.node.get_logger().info(f"  Answer SDP lines: {len(sdp_lines)}")
-                    if target == 'edge':
-                        self.node.get_logger().info("  >>> PROCESSING ANSWER FOR EDGE <<<")
-                    else:
-                        self.node.get_logger().warning(f"  Ignoring answer: target={target} (expected 'edge')")
-                elif msg_type == 'candidate':
-                    candidate = payload.get('candidate', {})
-                    self.node.get_logger().info(f"  ICE candidate: {str(candidate)[:100]}...")
-                
-            except Exception as e:
-                self.node.get_logger().error(f"Error logging WebRTC message: {e}")
-            
-            # Now call the parent's on_answer logic by delegating to parent's _subscribe_to_answer handler
-            # We need to process this manually since we're overriding
-            try:
-                payload = data if isinstance(data, dict) else json.loads(data)
-                
-                if payload.get("type") == "offer":
-                    return
-                elif payload.get("type") == "answer":
-                    if payload.get("target") == "edge":
-                        answer_sensor = payload.get("sensor") or payload.get("camera")
-                        expected = self.camera_name if self.camera_name is not None else "default"
-                        if answer_sensor is None or answer_sensor == expected:
-                            self._answer_data = payload
-                            self._answer_received = True
-                            self.node.get_logger().info(f"  >>> ANSWER ACCEPTED (sensor match) <<<")
-                        else:
-                            self.node.get_logger().warning(
-                                f"  Ignoring answer: sensor mismatch (expected={expected}, got={answer_sensor})"
-                            )
-                elif payload.get("type") == "candidate":
-                    if payload.get("target") == "edge":
-                        self._handle_candidate(payload)
-            except Exception as e:
-                self.node.get_logger().error(f"Error processing WebRTC message: {e}")
-        
-        self.client.subscribe(answer_topic, logging_on_answer)
-        self.client.subscribe(candidate_topic, logging_on_answer)
-        self.node.get_logger().info(f"=== SUBSCRIBED TO WEBRTC SIGNALING ===")
-    
-    async def _wait_for_answer(self, timeout: float = 60.0):
-        """Override to add diagnostic logging while waiting for answer."""
-        import time as time_mod
-        
-        self.node.get_logger().info(f"=== WAITING FOR WEBRTC ANSWER (timeout={timeout}s) ===")
-        start_time = time_mod.time()
-        last_log_time = start_time
-        
-        while not self._answer_received:
-            elapsed = time_mod.time() - start_time
-            
-            # Log progress every 10 seconds
-            if time_mod.time() - last_log_time >= 10.0:
-                self.node.get_logger().warning(
-                    f"  Still waiting for WebRTC answer... {elapsed:.1f}s elapsed"
-                )
-                last_log_time = time_mod.time()
-            
-            if elapsed > timeout:
-                self.node.get_logger().error(
-                    f"=== WEBRTC ANSWER TIMEOUT after {elapsed:.1f}s ==="
-                )
-                self.node.get_logger().error(
-                    "  The cloud/backend is not responding to the WebRTC offer."
-                )
-                self.node.get_logger().error(
-                    "  Check: 1) Cloud service is running, 2) MQTT connectivity, 3) Topic routing"
-                )
-                raise TimeoutError("Timeout waiting for WebRTC answer")
-            
-            await asyncio.sleep(0.1)
-        
-        elapsed = time_mod.time() - start_time
-        self.node.get_logger().info(f"=== WEBRTC ANSWER RECEIVED in {elapsed:.1f}s ===")
-        
-        if self._answer_data is None:
-            raise RuntimeError("Answer received flag set but answer data is None")
-        
-        import json
-        answer = (
-            json.loads(self._answer_data)
-            if isinstance(self._answer_data, str)
-            else self._answer_data
-        )
-        
-        from aiortc import RTCSessionDescription
-        await self.pc.setRemoteDescription(
-            RTCSessionDescription(sdp=answer["sdp"], type=answer["type"])
-        )
-        self.node.get_logger().info("=== WEBRTC REMOTE DESCRIPTION SET ===")
+        # Delegate entirely to the SDK's WebRTC setup — do not override signaling
+        # internals (_subscribe_to_answer, _send_offer, _wait_for_answer) as they
+        # can race with the SDK's own state machine on reconnect.
+        return await super().start(*args, **kwargs)

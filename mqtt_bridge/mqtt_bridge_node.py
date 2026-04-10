@@ -1894,15 +1894,37 @@ class MQTTBridgeNode(Node):
                         mapping = self._mapping
                         twin = mapping.twin_uuid
                         name_to_idx = {n: i for i, n in enumerate(msg.name or [])}
+
+                        # Retrieve servo positions tracked by CameraServoHandler so we
+                        # can override the stale zero values published by joint_state_publisher
+                        # for the pan-tilt joints (the hardware does not report them back).
+                        servo_overrides: dict = {}
+                        try:
+                            registry = getattr(self, "_command_registry", None)
+                            if registry is not None:
+                                servo_handler = registry._handlers.get("camera_servo")
+                                if servo_handler is not None:
+                                    servo_overrides = {
+                                        servo_handler._PAN_JOINT: servo_handler._pan_position,
+                                        servo_handler._TILT_JOINT: servo_handler._tilt_position,
+                                    }
+                        except Exception:
+                            pass
+
                         for ros_name, mqtt_name in mapping.name_to_mqtt.items():
                             idx = name_to_idx.get(ros_name)
                             if idx is None:
                                 continue
-                            pos = (
-                                float(msg.position[idx])
-                                if msg.position and idx < len(msg.position)
-                                else None
-                            )
+                            # Use servo override position when available to avoid the
+                            # joint_state_publisher resetting pan/tilt to 0.0 in the twin.
+                            if ros_name in servo_overrides:
+                                pos = servo_overrides[ros_name]
+                            else:
+                                pos = (
+                                    float(msg.position[idx])
+                                    if msg.position and idx < len(msg.position)
+                                    else None
+                                )
                             vel = (
                                 float(msg.velocity[idx])
                                 if msg.velocity and idx < len(msg.velocity)
@@ -2025,6 +2047,25 @@ class MQTTBridgeNode(Node):
                     # { "type": "joint_state", "joint_name": "...", "joint_state": { "position": ... } }
                     # or consolidated mapping
                     payload_obj = mapping.remap_ros_to_mqtt(msg)
+
+                    # Override pan-tilt servo positions with values tracked by
+                    # CameraServoHandler.  The joint_state_publisher resets them to 0
+                    # because the hardware doesn't report servo feedback positions.
+                    try:
+                        registry = getattr(self, "_command_registry", None)
+                        if registry is not None:
+                            servo_handler = registry._handlers.get("camera_servo")
+                            if servo_handler is not None and isinstance(payload_obj, dict):
+                                positions = payload_obj.get("positions", {})
+                                if isinstance(positions, dict):
+                                    pan_mqtt = mapping.name_to_mqtt.get(servo_handler._PAN_JOINT)
+                                    tilt_mqtt = mapping.name_to_mqtt.get(servo_handler._TILT_JOINT)
+                                    if pan_mqtt:
+                                        positions[pan_mqtt] = servo_handler._pan_position
+                                    if tilt_mqtt:
+                                        positions[tilt_mqtt] = servo_handler._tilt_position
+                    except Exception:
+                        pass
 
                     # Ensure source_type and ts are present (Go2 style)
                     if isinstance(payload_obj, dict):

@@ -214,15 +214,23 @@ class ROSVideoStreamTrack(BaseVideoTrack):
                 f"Frame {self.frame_count}: Sending frame to WebRTC ({frames_received} total received)"
             )
             
+        now = time.time()
+        now_monotonic = time.monotonic()
+
         if self.frame_count == 1:
-            self.frame_0_timestamp = time.time()
-            self.frame_0_timestamp_monotonic = time.monotonic()
+            self.frame_0_timestamp = now
+            self.frame_0_timestamp_monotonic = now_monotonic
 
         frame = VideoFrame.from_ndarray(frame_data, format="bgr24")
         frame = frame.reformat(format="yuv420p")
         frame.pts = pts
         frame.time_base = time_base
-        
+
+        # Capture sync frame data so the SDK can publish a camera_sync_frame MQTT
+        # message after streaming starts. This anchor is required for the backend to
+        # correctly trim and timestamp the recording for Replay.
+        self._capture_sync_frame(now, now_monotonic, pts)
+
         # Keyframe every 4 seconds or first 10 frames
         if self.frame_count % (int(self.fps) * 4) == 1 or self.frame_count < 10:
             frame.key_frame = True
@@ -260,6 +268,18 @@ class ROSCameraStreamer(BaseVideoStreamer):
         if self.force_relay:
             enable_relay_only_ice_mode()
 
+        # Populate camera_name from mapping if not explicitly provided.
+        # The media service requires a non-None sensor field in the WebRTC offer to
+        # start a recording; without it the backend logs an error and skips recording,
+        # which is why UGV streams never appeared in the Replay tab.
+        if 'camera_name' not in kwargs or kwargs.get('camera_name') is None:
+            mapping_camera_name = None
+            if hasattr(node, '_mapping') and node._mapping:
+                camera_config = node._mapping.raw.get('camera', {})
+                mapping_camera_name = camera_config.get('camera_name') or camera_config.get('sensor_id')
+            if mapping_camera_name:
+                kwargs['camera_name'] = mapping_camera_name
+
         super().__init__(client, *args, **kwargs)
         self.node = node
 
@@ -272,7 +292,10 @@ class ROSCameraStreamer(BaseVideoStreamer):
             self.image_topic = "/image_raw"
 
         mode_str = " (TURN relay-only)" if self.force_relay else ""
-        self.node.get_logger().info(f"ROSCameraStreamer: {self.image_topic} @ {self.fps}fps{mode_str}")
+        self.node.get_logger().info(
+            f"ROSCameraStreamer: {self.image_topic} @ {self.fps}fps{mode_str}"
+            + (f", camera_name={self.camera_name}" if self.camera_name else ", camera_name=None (recording disabled)")
+        )
 
     def initialize_track(self) -> ROSVideoStreamTrack:
         """Required by BaseVideoStreamer: create the video track."""

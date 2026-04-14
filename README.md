@@ -394,8 +394,13 @@ internal_odometry:
   right_wheel_joints: ["right_up_wheel_link_joint", "right_down_wheel_link_joint"]
 
 # Camera streaming configuration
+# camera_name must match a sensor ID on the Cyberwave twin's asset schema.
+# It is required for recordings to appear in the Replay tab; without it
+# the media service cannot associate the stream with a sensor and skips recording.
 camera:
+  image_topic: "/image_raw"
   format: "yuv420p"
+  camera_name: "default"  # Must match a sensor ID on the twin's asset schema
 
 capabilities:
   upstream_mode: "pose"
@@ -436,7 +441,7 @@ If your robot has custom ROS services or actions (e.g., a gripper, a sprayer, or
 ### 3. (Optional) Enable Plugins
 *   **Internal Odometry**: If your robot doesn't publish `/odom`, enable the `internal_odometry` block in your YAML.
 *   **Navigation**: If using Nav2, ensure your robot has the standard Nav2 action servers running.
-*   **Camera**: Add a `camera` block to configure WebRTC streaming.
+*   **Camera**: Add a `camera` block to configure WebRTC streaming. Include `camera_name` to match a sensor ID on the twin's asset schema — this is required for recordings to appear in the Replay tab.
 
 ### 4. Launch
 Run the bridge with your new `robot_id`:

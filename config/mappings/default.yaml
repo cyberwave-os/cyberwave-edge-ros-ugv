@@ -16,3 +16,6 @@ capabilities:
   upstream_topics:
     - joint
 
+# Default command registry for basic command handling (movement, lights, etc.)
+command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.CommandRegistry"
+

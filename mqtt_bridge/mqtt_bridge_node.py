@@ -742,49 +742,8 @@ class MQTTBridgeNode(Node):
 
         # Initialize command router registry if specified in mapping
         self._command_registry = None
-        if self._mapping is not None and self._mapping.command_registry:
-            try:
-                # Dynamically load the registry class
-                registry_path = self._mapping.command_registry
-                module_path, class_name = registry_path.rsplit(".", 1)
-                module = importlib.import_module(module_path)
-                registry_class = getattr(module, class_name)
-
-                self._command_registry = registry_class(self)
-
-                # Link command registry to MQTT adapter for bi-directional command handling
-                cmd_topic_template = "cyberwave/twin/{twin_uuid}/command"
-                cmd_topic = cmd_topic_template
-                if self._mapping is not None and getattr(
-                    self._mapping, "twin_uuid", None
-                ):
-                    cmd_topic = cmd_topic_template.replace(
-                        "{twin_uuid}", self._mapping.twin_uuid
-                    )
-
-                # Ensure topic follows pattern: {prefix}cyberwave/{scope}/{twin_uuid}/{object}
-                if hasattr(self, "ros_prefix") and self.ros_prefix:
-                    if not cmd_topic.startswith(self.ros_prefix):
-                        cmd_topic = f"{self.ros_prefix}{cmd_topic}"
-
-                self._command_registry.set_mqtt_context(
-                    self._mqtt_adapter or self._mqtt_client, cmd_topic
-                )
-
-                # Register an empty callback for the command topic so the bridge subscribes to it
-                if cmd_topic not in self._mqtt_callbacks:
-                    self._mqtt_callbacks[cmd_topic] = []
-
-                registered = self._command_registry.get_registered_commands()
-                self.get_logger().info(
-                    f"Command router '{class_name}' initialized with {len(registered)} handlers"
-                )
-            except Exception as e:
-                self.get_logger().warning(
-                    f"Could not initialize command registry from {self._mapping.command_registry}: {e}"
-                )
-        else:
-            self.get_logger().info("No command registry specified in mapping")
+        self._command_registry_init_attempts = 0
+        self._try_init_command_registry()
 
         # Service to trigger a mapping reload at runtime (hot-reload).
         # Create a node-scoped service name so callers can call
@@ -1592,6 +1551,80 @@ class MQTTBridgeNode(Node):
                 f"Adapter subscribe for '{normalized}' failed: {e}"
             )
 
+    def _try_init_command_registry(self) -> bool:
+        """Attempt to initialise the command registry from the mapping.
+
+        Returns True if the registry is ready (already initialised or
+        successfully created), False otherwise.  Safe to call repeatedly;
+        after ``_MAX_REGISTRY_INIT_ATTEMPTS`` consecutive failures the
+        method stops retrying and logs an error.
+        """
+        _MAX_REGISTRY_INIT_ATTEMPTS = 5
+
+        if self._command_registry is not None:
+            return True
+
+        if self._mapping is None or not self._mapping.command_registry:
+            if self._command_registry_init_attempts == 0:
+                self.get_logger().info("No command registry specified in mapping")
+            return False
+
+        self._command_registry_init_attempts += 1
+        if self._command_registry_init_attempts > _MAX_REGISTRY_INIT_ATTEMPTS:
+            return False
+
+        try:
+            registry_path = self._mapping.command_registry
+            module_path, class_name = registry_path.rsplit(".", 1)
+            module = importlib.import_module(module_path)
+            registry_class = getattr(module, class_name)
+
+            self._command_registry = registry_class(self)
+
+            cmd_topic_template = "cyberwave/twin/{twin_uuid}/command"
+            cmd_topic = cmd_topic_template
+            if self._mapping is not None and getattr(
+                self._mapping, "twin_uuid", None
+            ):
+                cmd_topic = cmd_topic_template.replace(
+                    "{twin_uuid}", self._mapping.twin_uuid
+                )
+
+            if hasattr(self, "ros_prefix") and self.ros_prefix:
+                if not cmd_topic.startswith(self.ros_prefix):
+                    cmd_topic = f"{self.ros_prefix}{cmd_topic}"
+
+            self._command_registry.set_mqtt_context(
+                self._mqtt_adapter or self._mqtt_client, cmd_topic
+            )
+
+            if cmd_topic not in self._mqtt_callbacks:
+                self._mqtt_callbacks[cmd_topic] = []
+
+            registered = self._command_registry.get_registered_commands()
+            attempt = self._command_registry_init_attempts
+            self.get_logger().info(
+                f"Command router '{class_name}' initialized with "
+                f"{len(registered)} handlers (attempt {attempt})"
+            )
+            return True
+        except Exception as e:
+            import traceback
+            attempt = self._command_registry_init_attempts
+            self.get_logger().error(
+                f"Could not initialize command registry from "
+                f"{self._mapping.command_registry} (attempt {attempt}/"
+                f"{_MAX_REGISTRY_INIT_ATTEMPTS}): {e}\n{traceback.format_exc()}"
+            )
+            if attempt >= _MAX_REGISTRY_INIT_ATTEMPTS:
+                self.get_logger().error(
+                    "Max command registry init attempts reached. "
+                    "Commands will NOT be processed. Check that the "
+                    "command_registry class path in the mapping YAML is "
+                    "correct and all dependencies are installed."
+                )
+            return False
+
     def _load_mapping(self) -> None:
         # Prefer explicit mapping_file param, otherwise robot_id -> default file
         mapping_file = self.get_parameter("mapping_file").value or ""
@@ -2368,13 +2401,11 @@ class MQTTBridgeNode(Node):
                 mqtt_msg = topic
                 topic = mqtt_msg.topic
                 payload_bytes = mqtt_msg.payload
-            else:  # Bridge style: _handle_mqtt_message(topic, payload, mqtt_msg)
+            else:  # Bridge style: _handle_mqtt_message(topic, payload)
                 payload_bytes = payload
         else:  # Full 3-arg style
             topic = mqtt_msg.topic
             payload_bytes = mqtt_msg.payload
-
-        payload_bytes = mqtt_msg.payload
 
         try:
             payload = payload_bytes.decode("utf-8")
@@ -2451,6 +2482,10 @@ class MQTTBridgeNode(Node):
                     self.get_logger().info(
                         f"Accepted {command} command from {source_type}"
                     )
+
+            # Lazy-init: if registry failed at startup, retry now
+            if command and self._command_registry is None:
+                self._try_init_command_registry()
 
             if command and self._command_registry is not None:
                 try:

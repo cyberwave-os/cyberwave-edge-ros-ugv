@@ -14,7 +14,7 @@ joints:
     transform:
       scale: 1.0
       offset: 0.0
-      invert:  false
+      invert: false
   - ros_name: "shoulder_lift_joint"
     mqtt_name: "shoulder_lift_joint"
     transform:
@@ -73,16 +73,16 @@ io_configuration:
 
 # Robot motion constants for safe trajectory generation
 robot_constants:
-  # Maximum joint velocities (rad/s) 
+  # Maximum joint velocities (rad/s)
   max_velocities:
-    shoulder_pan_joint: 2.0 
+    shoulder_pan_joint: 2.0
     shoulder_lift_joint: 2.0
     elbow_joint: 2.0
     wrist_1_joint: 2.0
     wrist_2_joint: 2.0
     wrist_3_joint: 2.0
-    default: 2.0 
-  
+    default: 2.0
+
   # Maximum joint accelerations (rad/s²)
   max_accelerations:
     shoulder_pan_joint: 5.0  # Increased from 3.0
@@ -92,10 +92,9 @@ robot_constants:
     wrist_2_joint: 5.0
     wrist_3_joint: 5.0
     default: 5.0
-  
+
   # Minimum trajectory time (seconds) - reduced for faster response
   min_trajectory_time: 0.3  # Decreased from 0.5
-  
+
   # Safety factor to multiply calculated time (reduced for faster motion)
   time_safety_factor: 1.5  # Decreased from 2.0
-  

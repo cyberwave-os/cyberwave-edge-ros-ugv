@@ -239,7 +239,7 @@ class MQTTBridgeNode(Node):
         port_param = self.get_parameter("broker.port").value
         username_param = self.get_parameter("broker.username").value
         password_param = self.get_parameter("broker.password").value
-        host = host_param or "mqtt.cyberwave.com"
+        host = host_param or mqtt_broker_env or "mqtt.cyberwave.com"
         try:
             port = int(port_param) if port_param is not None else 8883
         except Exception:

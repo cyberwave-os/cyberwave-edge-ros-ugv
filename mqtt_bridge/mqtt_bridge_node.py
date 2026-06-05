@@ -531,11 +531,8 @@ class MQTTBridgeNode(Node):
                 else:
                     chosen_prefix = "" if param_prefix == "production" else param_prefix
 
-                # Normalize prefix: strip whitespace, ensure trailing '/' if non-empty
-                # SDK concatenates: f"{prefix}cyberwave/..." so prefix needs trailing slash
                 chosen_prefix = chosen_prefix.strip() if chosen_prefix else ""
-                if chosen_prefix and not chosen_prefix.endswith("/"):
-                    chosen_prefix = f"{chosen_prefix}/"
+                chosen_prefix = chosen_prefix.rstrip("/") if chosen_prefix else ""
 
                 self.topic_prefix = chosen_prefix
                 self.ros_prefix = self.topic_prefix
@@ -600,11 +597,8 @@ class MQTTBridgeNode(Node):
                 else:
                     chosen_prefix = "" if param_prefix == "production" else param_prefix
 
-                # Normalize prefix: strip whitespace, ensure trailing '/' if non-empty
-                # SDK concatenates: f"{prefix}cyberwave/..." so prefix needs trailing slash
                 chosen_prefix = chosen_prefix.strip() if chosen_prefix else ""
-                if chosen_prefix and not chosen_prefix.endswith("/"):
-                    chosen_prefix = f"{chosen_prefix}/"
+                chosen_prefix = chosen_prefix.rstrip("/") if chosen_prefix else ""
 
                 self.topic_prefix = chosen_prefix
                 self.ros_prefix = self.topic_prefix

@@ -192,7 +192,7 @@ COPY . /home/ws/ugv_ws/src/mqtt_bridge
 COPY scripts/ugv_beast/ugv_bringup/launch/master_beast.launch.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/launch/
 COPY scripts/ugv_beast/ugv_bringup/ugv_bringup/ugv_integrated_driver.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup/
 COPY scripts/ugv_beast/ugv_bringup/setup.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/setup.py
-
+COPY scripts/ugv_beast/ugv_base/base_node.cpp /home/ws/ugv_ws/src/ugv_main/ugv_base_node/src/base_node.cpp
 # Copy startup and service scripts
 COPY scripts/ugv_beast/ugv_services_install.sh /home/ws/ugv_ws/ugv_services_install.sh
 #COPY scripts/ugv_beast/start_ugv.sh /home/ws/ugv_ws/start_ugv.sh

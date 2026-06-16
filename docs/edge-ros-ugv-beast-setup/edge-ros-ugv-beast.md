@@ -93,7 +93,7 @@ The UGV Beast MQTT integration follows a bidirectional bridge architecture that 
 | **mqtt_bridge_node.py** | Main orchestrator - handles MQTT connectivity and message routing |
 | **cyberwave_mqtt_adapter.py** | Wrapper around Cyberwave SDK for MQTT operations |
 | **mapping.py** | Loads robot-specific YAML mappings for joint name transformations |
-| **command_handler.py** | Pluggable command routing system (Command Pattern + Registry Pattern) |
+| **plugins/ugv_beast_command_handler.py** | UGV Beast command registry and hardware-specific command handlers |
 | **telemetry.py** | Joint state accumulation and high-frequency feedback processing |
 | **health.py** | Periodic heartbeat and system status reporting |
 
@@ -101,7 +101,7 @@ The UGV Beast MQTT integration follows a bidirectional bridge architecture that 
 
 | Plugin | Description |
 |--------|-------------|
-| **ugv_beast_command_handler.py** | UGV Beast-specific command handlers |
+| **ugv_beast_command_handler.py** | UGV Beast command registry implementation |
 | **navigation_bridge.py** | Nav2 integration for autonomous navigation |
 | **internal_odometry.py** | Dead-reckoning for robots without native odometry |
 | **ros_camera.py** | WebRTC video streaming from ROS Image topics |

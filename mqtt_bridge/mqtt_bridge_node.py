@@ -2490,6 +2490,8 @@ class MQTTBridgeNode(Node):
                         "turn_left",
                         "turn_right",
                         "stop",
+                        "locomotion_velocity",
+                        "velocity_command",
                         "camera_up",
                         "camera_down",
                         "camera_left",

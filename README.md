@@ -75,7 +75,19 @@ CYBERWAVE_MQTT_PORT=1883
 
 # Rate limiting (1 Hz = 1 second between publishes)
 MQTT_PUBLISH_RATE_LIMIT=1.0
+
+# UGV velocity safety defaults
+CYBERWAVE_UGV_MAX_LINEAR_SPEED=0.35
+CYBERWAVE_UGV_MAX_ANGULAR_SPEED=1.0
+CYBERWAVE_UGV_DEFAULT_LINEAR_SPEED=0.3
+CYBERWAVE_UGV_DEFAULT_ANGULAR_SPEED=1.0
 ```
+
+The bridge consumes `locomotion.velocity_command.v1` for UGV movement. Legacy
+commands such as `move_forward` and `turn_left` are thin compatibility wrappers
+that emit the canonical velocity command before mapping to `/cmd_vel`. The edge
+keeps a timed stop as a local safety watchdog; backend timed execution remains
+the primary command-duration owner.
 
 
 ```bash
@@ -383,7 +395,7 @@ metadata:
   twin_uuid: "your-twin-uuid-here"
 
 # Pluggable command registry
-command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.UGVBeastCommandRegistry"
+command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.CommandRegistry"
 
 # Generic internal odometry
 internal_odometry:
@@ -583,7 +595,7 @@ The bridge is designed to be fully general-purpose and robot-agnostic. All robot
 The bridge does not hardcode command logic. Instead, the mapping file specifies a pluggable command registry class that is dynamically loaded.
 *   **Example (`robot_ugv_beast_v1.yaml`)**:
     ```yaml
-    command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.UGVBeastCommandRegistry"
+    command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.CommandRegistry"
     ```
 
 #### 2. Generic Internal Odometry

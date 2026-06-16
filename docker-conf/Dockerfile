@@ -15,8 +15,8 @@
 #   - SSH configured: Port 23, PermitRootLogin yes
 #   - ROS2 sourced in bashrc
 #
-# Build from cyberwave-edge-nodes/cyberwave-edge-ros-ugv:
-#   docker build -f docker-conf/Dockerfile -t cyberwaveos/ugv-driver:latest .
+# Build from cyberwave-edge-nodes:
+#   docker build -f cyberwave-edge-ros-ugv/docker-conf/Dockerfile -t cyberwaveos/ugv-driver:latest .
 #
 # ============================================================================
 
@@ -185,16 +185,20 @@ WORKDIR /home/ws/ugv_ws
 # Cache buster - pass --build-arg CACHEBUST=$(date +%s) to force rebuild from here
 ARG CACHEBUST=1
 
-# Copy mqtt_bridge source package
-COPY . /home/ws/ugv_ws/src/mqtt_bridge
+# Copy shared edge helpers and mqtt_bridge source package.
+COPY cyberwave-edge-common /tmp/cyberwave-edge-common
+RUN pip3 install --no-cache-dir --break-system-packages /tmp/cyberwave-edge-common \
+    || pip3 install --no-cache-dir /tmp/cyberwave-edge-common
+
+COPY cyberwave-edge-ros-ugv /home/ws/ugv_ws/src/mqtt_bridge
 
 # Overwrite specific ugv_bringup files with Cyberwave customizations
-COPY scripts/ugv_beast/ugv_bringup/launch/master_beast.launch.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/launch/
-COPY scripts/ugv_beast/ugv_bringup/ugv_bringup/ugv_integrated_driver.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup/
-COPY scripts/ugv_beast/ugv_bringup/setup.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/setup.py
+COPY cyberwave-edge-ros-ugv/scripts/ugv_beast/ugv_bringup/launch/master_beast.launch.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/launch/
+COPY cyberwave-edge-ros-ugv/scripts/ugv_beast/ugv_bringup/ugv_bringup/ugv_integrated_driver.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup/
+COPY cyberwave-edge-ros-ugv/scripts/ugv_beast/ugv_bringup/setup.py /home/ws/ugv_ws/src/ugv_main/ugv_bringup/setup.py
 
 # Copy startup and service scripts
-COPY scripts/ugv_beast/ugv_services_install.sh /home/ws/ugv_ws/ugv_services_install.sh
+COPY cyberwave-edge-ros-ugv/scripts/ugv_beast/ugv_services_install.sh /home/ws/ugv_ws/ugv_services_install.sh
 #COPY scripts/ugv_beast/start_ugv.sh /home/ws/ugv_ws/start_ugv.sh
 #COPY scripts/ugv_beast/ugv_run.sh /home/ws/ugv_ws/ugv_run.sh
 

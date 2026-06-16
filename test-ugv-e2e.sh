@@ -29,14 +29,27 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+EDGE_NODES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/cyberwave-backend"
 CLI_DIR="$REPO_ROOT/cyberwave-clis/cyberwave-python-cli"
 EDGE_CORE_DIR="$REPO_ROOT/cyberwave-edge-core"
 SDK_DIR="$REPO_ROOT/${CYBERWAVE_SDK_REL_PATH:-cyberwave-sdks/cyberwave-python}"
 
-UGV_IMAGE="cyberwave-edge-ros-ugv"
+UGV_IMAGE="cyberwave-edge-ros-ugv:local"
 PI_SIM_IMAGE="cyberwave-ugv-pi-sim"
 SKIP_BUILD=false
+E2E_CONFIG_DIR="${CYBERWAVE_UGV_E2E_CONFIG_DIR:-$SCRIPT_DIR/.tmp/e2e-config}"
+CONFIG_DIR_CREATED=false
+
+if [ -z "${CYBERWAVE_UGV_E2E_CONFIG_DIR:-}" ]; then
+    CONFIG_DIR_CREATED=true
+    rm -rf "$E2E_CONFIG_DIR"
+fi
+mkdir -p "$E2E_CONFIG_DIR"
+CONFIG_VOLUME_ARGS=(
+    -v "$E2E_CONFIG_DIR:$E2E_CONFIG_DIR"
+    -e "CYBERWAVE_EDGE_CONFIG_DIR=$E2E_CONFIG_DIR"
+)
 
 TEST_EMAIL="admin@cyberwave.com"
 TEST_PASSWORD="admin123"
@@ -74,6 +87,10 @@ cleanup() {
     echo ""
     echo "=== Cleaning up ==="
     docker rm -f cyberwave-driver-* 2>/dev/null || true
+    if [ "$CONFIG_DIR_CREATED" = true ]; then
+        rm -rf "$E2E_CONFIG_DIR"
+        rmdir "$SCRIPT_DIR/.tmp" 2>/dev/null || true
+    fi
     if [ "$BACKEND_STARTED" = true ]; then
         echo "Stopping backend..."
         cd "$BACKEND_DIR" && docker compose -f local.yml down --remove-orphans 2>/dev/null || true
@@ -151,18 +168,21 @@ echo "=========================================="
 echo " Step 4: Building UGV Docker image"
 echo "=========================================="
 
-cd "$SCRIPT_DIR"
+cd "$EDGE_NODES_DIR"
 
 if [ "$SKIP_BUILD" = true ]; then
     if docker image inspect "$UGV_IMAGE" &>/dev/null; then
         echo "Skipping UGV build — reusing existing image: $UGV_IMAGE"
+    elif docker image inspect "cyberwave-edge-ros-ugv" &>/dev/null; then
+        echo "Tagging existing cyberwave-edge-ros-ugv image as $UGV_IMAGE"
+        docker tag cyberwave-edge-ros-ugv "$UGV_IMAGE"
     else
         echo "ERROR: --skip-build but image '$UGV_IMAGE' not found. Run without --skip-build."
         exit 1
     fi
 else
     echo "Building $UGV_IMAGE (this takes 10-15 min on first build)..."
-    docker build -t "$UGV_IMAGE" .
+    docker build -f cyberwave-edge-ros-ugv/docker-conf/Dockerfile -t "$UGV_IMAGE" .
     echo "  ✅ UGV Docker image built"
 fi
 
@@ -234,6 +254,7 @@ echo "=========================================="
 
 docker run --rm \
     --add-host=host.docker.internal:host-gateway \
+    "${CONFIG_VOLUME_ARGS[@]}" \
     -e CYBERWAVE_BASE_URL=http://host.docker.internal:8000 \
     "$PI_SIM_IMAGE" \
     cyberwave login --email "$TEST_EMAIL" --password "$TEST_PASSWORD"
@@ -250,8 +271,11 @@ echo "=========================================="
 
 docker run --rm -i \
     --add-host=host.docker.internal:host-gateway \
+    "${CONFIG_VOLUME_ARGS[@]}" \
     -e CYBERWAVE_BASE_URL=http://host.docker.internal:8000 \
     -e CYBERWAVE_MQTT_HOST=host.docker.internal \
+    -e CYBERWAVE_MQTT_PORT=1883 \
+    -e CYBERWAVE_MQTT_USE_TLS=false \
     -e CYBERWAVE_ENVIRONMENT=local \
     "$PI_SIM_IMAGE" \
     bash -c "
@@ -266,11 +290,10 @@ cyberwave login --email '$TEST_EMAIL' --password '$TEST_PASSWORD'
 import json
 import time
 import httpx
-from pathlib import Path
 
 from cyberwave import Cyberwave
 from cyberwave.fingerprint import generate_fingerprint
-from cyberwave_cli.config import get_api_url
+from cyberwave_cli.config import CONFIG_DIR, get_api_url
 from cyberwave_cli.credentials import load_credentials
 
 creds = load_credentials()
@@ -377,7 +400,7 @@ print(f'  Driver metadata set: image=$UGV_IMAGE')
 print(f'  Edge fingerprint: {fingerprint}')
 
 # --- Write edge config files ---
-config_dir = Path('/etc/cyberwave')
+config_dir = CONFIG_DIR
 config_dir.mkdir(parents=True, exist_ok=True)
 
 (config_dir / 'fingerprint.json').write_text(
@@ -425,8 +448,11 @@ echo "=========================================="
 
 docker run --rm -i \
     --add-host=host.docker.internal:host-gateway \
+    "${CONFIG_VOLUME_ARGS[@]}" \
     -e CYBERWAVE_BASE_URL=http://host.docker.internal:8000 \
     -e CYBERWAVE_MQTT_HOST=host.docker.internal \
+    -e CYBERWAVE_MQTT_PORT=1883 \
+    -e CYBERWAVE_MQTT_USE_TLS=false \
     -e CYBERWAVE_ENVIRONMENT=local \
     -v "$DOCKER_SOCK":/var/run/docker.sock \
     "$PI_SIM_IMAGE" \
@@ -452,13 +478,13 @@ fi
 # Configure edge environment (creates environment.json)
 /opt/venvs/cli/bin/python3 - <<'PY'
 import json
-from pathlib import Path
+from cyberwave_cli.config import CONFIG_DIR
 from cyberwave_cli.core import configure_edge_environment
 
 ok = configure_edge_environment(skip_confirm=True)
 assert ok, 'configure_edge_environment returned False'
 
-env_path = Path('/etc/cyberwave/environment.json')
+env_path = CONFIG_DIR / 'environment.json'
 assert env_path.exists(), f'{env_path} not found'
 
 data = json.loads(env_path.read_text())
@@ -482,8 +508,11 @@ echo "=========================================="
 
 docker run --rm -i \
     --add-host=host.docker.internal:host-gateway \
+    "${CONFIG_VOLUME_ARGS[@]}" \
     -e CYBERWAVE_BASE_URL=http://host.docker.internal:8000 \
     -e CYBERWAVE_MQTT_HOST=host.docker.internal \
+    -e CYBERWAVE_MQTT_PORT=1883 \
+    -e CYBERWAVE_MQTT_USE_TLS=false \
     -e CYBERWAVE_ENVIRONMENT=local \
     -v "$DOCKER_SOCK":/var/run/docker.sock \
     "$PI_SIM_IMAGE" \
@@ -508,23 +537,18 @@ cyberwave login --email '$TEST_EMAIL' --password '$TEST_PASSWORD'
 
 /opt/venvs/cli/bin/python3 - <<'PY'
 import json
-from pathlib import Path
-from cyberwave import Cyberwave
-from cyberwave.fingerprint import generate_fingerprint
-from cyberwave_cli.config import get_api_url
+from cyberwave_cli.config import CONFIG_DIR
 from cyberwave_cli.credentials import load_credentials
 from cyberwave_cli.core import configure_edge_environment
 
 creds = load_credentials()
-client = Cyberwave(base_url=get_api_url(), token=creds.token)
 
 configure_edge_environment(skip_confirm=True)
 
-config_dir = Path('/etc/cyberwave')
-fingerprint = generate_fingerprint()
-(config_dir / 'fingerprint.json').write_text(
-    json.dumps({'fingerprint': fingerprint}, indent=2) + '\n'
-)
+config_dir = CONFIG_DIR
+fingerprint_path = config_dir / 'fingerprint.json'
+fingerprint = json.loads(fingerprint_path.read_text()).get('fingerprint')
+assert fingerprint, f'{fingerprint_path} did not contain a fingerprint'
 
 print(f'  Fingerprint: {fingerprint}')
 PY
@@ -532,9 +556,9 @@ PY
 # Run driver discovery
 /opt/venvs/edge-core/bin/python3 - <<'PY'
 import json
-from pathlib import Path
+from cyberwave_edge_core.startup import CONFIG_DIR, fetch_and_run_twin_drivers
 
-config_dir = Path('/etc/cyberwave')
+config_dir = CONFIG_DIR
 creds = json.loads((config_dir / 'credentials.json').read_text())
 env_data = json.loads((config_dir / 'environment.json').read_text())
 fp_data = json.loads((config_dir / 'fingerprint.json').read_text())
@@ -542,8 +566,6 @@ fp_data = json.loads((config_dir / 'fingerprint.json').read_text())
 token = creds['token']
 env_uuid = env_data['uuid']
 fingerprint = fp_data['fingerprint']
-
-from cyberwave_edge_core.startup import fetch_and_run_twin_drivers
 
 print(f'  Running fetch_and_run_twin_drivers...')
 print(f'    env={env_uuid[:8]}..., fingerprint={fingerprint}')
@@ -558,10 +580,16 @@ for r in results:
 
 if results:
     print()
+    failures = [r for r in results if not r.get('success')]
+    if failures:
+        failed_names = ', '.join(
+            '{} ({})'.format(r.get('twin_name', '?'), r.get('driver_image', '?'))
+            for r in failures
+        )
+        raise SystemExit(f'Driver startup failed for: {failed_names}')
     print('  ✅ Edge-core discovered and launched driver(s)')
 else:
-    print()
-    print('  ⚠️  No drivers found (twin may not have edge_fingerprint set)')
+    raise SystemExit('No drivers found (twin may not have edge_fingerprint set)')
 PY
 "
 

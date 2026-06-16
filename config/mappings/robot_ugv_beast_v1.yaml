@@ -74,7 +74,6 @@ capabilities:
     - joint # {prefix}cyberwave/joint/{twin_uuid}/update
 
 # Command Registry class for this robot
-#command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.UGVBeastCommandRegistry"
 command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.CommandRegistry"
 
 # Camera streaming configuration

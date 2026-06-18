@@ -11,8 +11,8 @@ Design Pattern: Command Pattern + Registry Pattern
 """
 
 import base64
-import math
 import time
+import math
 from typing import Any, Callable, Dict, Optional
 
 from rclpy.node import Node
@@ -31,9 +31,21 @@ from cyberwave_edge_common.actuation.ugv_velocity import (
     load_ugv_velocity_limits,
     normalize_ugv_velocity_command,
 )
+from cyberwave_edge_common.locomotion_contracts import build_locomotion_velocity_command
 from cyberwave_edge_common.ros.twist_mapper import publish_twist
 
 from .command_handler_base import CommandHandler
+
+
+_MOVEMENT_ACTUATIONS = frozenset(
+    {"move_forward", "move_backward", "turn_left", "turn_right"}
+)
+_MOVEMENT_OPPOSITES = {
+    "move_forward": "move_backward",
+    "move_backward": "move_forward",
+    "turn_left": "turn_right",
+    "turn_right": "turn_left",
+}
 
 
 # Import OpenCV for image encoding
@@ -55,6 +67,8 @@ class UGVBeastActuationHandler(CommandHandler):
 
     Supported actuations:
     - Locomotion: move_forward, move_backward, turn_left, turn_right, stop
+      Combined diagonals (W+D, W+A, S+D, S+A) merge active keys into one twist.
+      Movement watchdog auto-stops after 500ms with no teleop commands.
     - Camera: camera_up, camera_down, camera_left, camera_right
     - Lights: chassis_light_toggle, camera_light_toggle, led_toggle
     - Utilities: take_photo, battery_check
@@ -83,12 +97,28 @@ class UGVBeastActuationHandler(CommandHandler):
         self._camera_pan = 0.0
         self._camera_tilt = 0.0
 
+        # Movement watchdog: auto-stop if no commands received
+        self._last_movement_command_time = 0.0
+        self._movement_timeout = 0.5  # 500ms (2x typical 100ms teleop send rate)
+        self._watchdog_timer = None
+
+        # Active movement keys for combined diagonal teleop (W+D, W+A, S+D, S+A)
+        self._active_movements = {
+            "move_forward": False,
+            "move_backward": False,
+            "turn_left": False,
+            "turn_right": False,
+        }
+
         super().__init__(node)
         self.logger.info(
             f"UGVBeastActuationHandler initialized: "
             f"linear_speed={self._linear_speed} m/s, "
-            f"angular_speed={self._angular_speed} rad/s"
+            f"angular_speed={self._angular_speed} rad/s, "
+            f"movement_timeout={self._movement_timeout}s"
         )
+        self._start_movement_watchdog()
+    
         self._actuation_dispatch = self._build_actuation_dispatch()
 
     def get_command_name(self) -> str:
@@ -150,39 +180,78 @@ class UGVBeastActuationHandler(CommandHandler):
             return False
 
     def _process_actuation(self, actuation: str, data: Dict[str, Any] = None) -> bool:
-        """
-        Map actuation string to appropriate ROS message.
-        """
-        command_data = data if isinstance(data, dict) else {}
+        """Map actuation string to appropriate ROS message."""
+        data = data or {}
+
+        if actuation in _MOVEMENT_ACTUATIONS:
+            self._last_movement_command_time = time.time()
+            self._active_movements[actuation] = True
+            self._active_movements[_MOVEMENT_OPPOSITES[actuation]] = False
+            self._publish_combined_twist()
+            return True
+
+        if actuation == "stop":
+            self._last_movement_command_time = 0.0
+            for key in self._active_movements:
+                self._active_movements[key] = False
+            return self._stop_motion()
+
         handler = self._actuation_dispatch.get(actuation)
         if handler is None:
             self.logger.warning(
                 f"Unknown actuation: {actuation}. "
-                f"Add mapping in UGVBeastActuationHandler._process_actuation()"
+                f"Add mapping in UGVBeastActuationHandler._build_actuation_dispatch()"
             )
             self.publish_response(
                 {"status": "error", "message": f"Unknown actuation: {actuation}"}
             )
             return False
-        return handler(command_data)
+        return handler(data)
+
+    def _handle_start_video(self, data: Dict[str, Any]) -> bool:
+        try:
+            if hasattr(self.node, "start_camera_stream"):
+                recording = True
+                if isinstance(data, dict):
+                    recording = data.get("recording", True)
+
+                self.logger.info(f"Starting video stream (recording={recording})")
+                self.node.start_camera_stream(recording=recording)
+                self.publish_simple_response({"status": "ok", "type": "video_started"})
+                return True
+
+            self.logger.error("start_video: node.start_camera_stream() not available")
+            self.publish_simple_response(
+                {"status": "error", "message": "Video streaming not supported"}
+            )
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to start video stream: {e}")
+            self.publish_simple_response({"status": "error", "message": str(e)})
+            return False
+
+    def _handle_stop_video(self) -> bool:
+        try:
+            if hasattr(self.node, "stop_camera_stream"):
+                self.logger.info("Stopping video stream")
+                self.node.stop_camera_stream()
+                self.publish_simple_response({"status": "ok", "type": "video_stopped"})
+                return True
+
+            self.logger.error("stop_video: node.stop_camera_stream() not available")
+            self.publish_simple_response(
+                {"status": "error", "message": "Video streaming not supported"}
+            )
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to stop video stream: {e}")
+            self.publish_simple_response({"status": "error", "message": str(e)})
+            return False
 
     def _build_actuation_dispatch(self) -> Dict[str, Callable[[Dict[str, Any]], bool]]:
         return {
             "locomotion_velocity": self._send_locomotion_velocity,
             "velocity_command": self._send_locomotion_velocity,
-            "move_forward": lambda _d: self._send_locomotion_velocity(
-                self._legacy_velocity_command(linear_x=self._linear_speed)
-            ),
-            "move_backward": lambda _d: self._send_locomotion_velocity(
-                self._legacy_velocity_command(linear_x=-self._linear_speed)
-            ),
-            "turn_left": lambda _d: self._send_locomotion_velocity(
-                self._legacy_velocity_command(angular_z=self._angular_speed)
-            ),
-            "turn_right": lambda _d: self._send_locomotion_velocity(
-                self._legacy_velocity_command(angular_z=-self._angular_speed)
-            ),
-            "stop": lambda _d: self._stop_motion(),
             "camera_up": lambda _d: self._send_camera_servo(
                 tilt_delta=self._camera_step
             ),
@@ -206,6 +275,8 @@ class UGVBeastActuationHandler(CommandHandler):
             "obstacle_avoidance_toggle": lambda _d: self._not_implemented(
                 "obstacle_avoidance_toggle"
             ),
+            "start_video": self._handle_start_video,
+            "stop_video": lambda _d: self._handle_stop_video(),
         }
 
     def _stop_motion(self) -> bool:
@@ -219,15 +290,13 @@ class UGVBeastActuationHandler(CommandHandler):
         angular_z: float = 0.0,
     ) -> Dict[str, Any]:
         return {
-            "velocity_command": {
-                "contract": "locomotion.velocity_command.v1",
-                "linear_x": linear_x,
-                "linear_y": 0.0,
-                "angular_z": angular_z,
-                "duration_ms": 500,
-                "gait": "walk",
-                "origin": "teleop",
-            }
+            "velocity_command": build_locomotion_velocity_command(
+                linear_x=linear_x,
+                angular_z=angular_z,
+                duration_ms=500,
+                gait="walk",
+                origin="teleop",
+            ).to_payload()
         }
 
     def _toggle_chassis_light(self) -> bool:
@@ -359,6 +428,46 @@ class UGVBeastActuationHandler(CommandHandler):
         except Exception as e:
             self.logger.error(f"Failed to send LED control: {e}")
             return False
+
+    def _start_movement_watchdog(self) -> None:
+        """Auto-stop if no movement commands arrive within the timeout window."""
+
+        def watchdog_callback() -> None:
+            if self._last_movement_command_time <= 0:
+                return
+            elapsed = time.time() - self._last_movement_command_time
+            if elapsed > self._movement_timeout:
+                self.logger.info(
+                    f"Movement watchdog: no commands for {elapsed:.2f}s, sending STOP"
+                )
+                for key in self._active_movements:
+                    self._active_movements[key] = False
+                self._stop_motion()
+                self._last_movement_command_time = 0.0
+
+        self._watchdog_timer = self.node.create_timer(0.1, watchdog_callback)
+        self.logger.info("Movement watchdog timer started (checks every 100ms)")
+
+    def _publish_combined_twist(self) -> None:
+        """Publish one twist from all currently active movement keys."""
+        linear_x = 0.0
+        angular_z = 0.0
+        if self._active_movements["move_forward"]:
+            linear_x += self._linear_speed
+        if self._active_movements["move_backward"]:
+            linear_x -= self._linear_speed
+        if self._active_movements["turn_left"]:
+            angular_z += self._angular_speed
+        if self._active_movements["turn_right"]:
+            angular_z -= self._angular_speed
+
+        self.logger.debug(
+            f"Combined twist: linear_x={linear_x:.2f}, angular_z={angular_z:.2f} "
+            f"(active: {[k for k, v in self._active_movements.items() if v]})"
+        )
+        # Keyboard hold-to-drive: watchdog stops on MQTT gap; do not arm TimedStop.
+        self._locomotion_stop.cancel()
+        return self._send_twist(linear_x, angular_z)
 
 
 class LightsHandler(CommandHandler):
@@ -1052,17 +1161,17 @@ class TakePhotoHandler(CommandHandler):
                     }
                 )
                 return False
-
-            # Try to get the latest frame from the camera streamer
+            
+            # Try to get the latest frame from the camera streamer (BGR for JPEG).
             frame = None
-            if hasattr(self.node, "_ros_streamer") and self.node._ros_streamer:
-                if (
-                    hasattr(self.node._ros_streamer, "streamer")
-                    and self.node._ros_streamer.streamer
-                ):
-                    if hasattr(self.node._ros_streamer.streamer, "latest_frame"):
-                        frame = self.node._ros_streamer.streamer.latest_frame
-
+            if hasattr(self.node, '_ros_streamer') and self.node._ros_streamer:
+                if hasattr(self.node._ros_streamer, 'streamer') and self.node._ros_streamer.streamer:
+                    streamer = self.node._ros_streamer.streamer
+                    if hasattr(streamer, 'get_latest_frame_bgr'):
+                        frame = streamer.get_latest_frame_bgr()
+                    elif hasattr(streamer, 'latest_frame'):
+                        frame = streamer.latest_frame
+            
             if frame is None:
                 self.publish_response(
                     {

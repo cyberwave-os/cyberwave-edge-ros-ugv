@@ -83,6 +83,15 @@ def generate_launch_description():
         default_value='true' if has_usb_cam else 'false',
         description='Whether to start the USB camera node (requires usb_cam package)'
     )
+
+    use_image_proc_arg = DeclareLaunchArgument(
+        'use_image_proc',
+        default_value='false',
+        description=(
+            'Start image_proc rectify_color_node for /image_rect '
+            '(default false: teleop uses usb_cam /image_raw + mqtt_bridge only)'
+        ),
+    )
     
     use_joint_state_pub_arg = DeclareLaunchArgument(
         'use_joint_state_publisher',
@@ -214,7 +223,7 @@ def generate_launch_description():
         respawn_delay=2.0
     )
 
-    # Image processing nodes (only if image_proc is available)
+    # Image processing (rectify_color_node) — opt-in; off by default for cloud teleop
     image_processing_container = None
     load_composable_nodes = None
     
@@ -234,7 +243,8 @@ def generate_launch_description():
 
         image_processing_container = ComposableNodeContainer(
             condition=IfCondition(PythonExpression([
-                "'", LaunchConfiguration('camera_container'), "' == '' and '",
+                "'", LaunchConfiguration('use_image_proc'), "' == 'true' and '",
+                LaunchConfiguration('camera_container'), "' == '' and '",
                 LaunchConfiguration('use_camera'), "' == 'true'"
             ])),
             name='image_proc_container',
@@ -247,7 +257,8 @@ def generate_launch_description():
 
         load_composable_nodes = LoadComposableNodes(
             condition=IfCondition(PythonExpression([
-                "'", LaunchConfiguration('camera_container'), "' != '' and '",
+                "'", LaunchConfiguration('use_image_proc'), "' == 'true' and '",
+                LaunchConfiguration('camera_container'), "' != '' and '",
                 LaunchConfiguration('use_camera'), "' == 'true'"
             ])),
             composable_node_descriptions=camera_composable_nodes,
@@ -264,6 +275,7 @@ def generate_launch_description():
         camera_container_arg,
         debug_logs_arg,
         use_camera_arg,
+        use_image_proc_arg,
         use_joint_state_pub_arg,
         use_base_node_arg,
         bringup_node,

@@ -76,7 +76,7 @@ capabilities:
 # Command Registry class for this robot
 command_registry: "mqtt_bridge.plugins.ugv_beast_command_handler.CommandRegistry"
 
-# Camera streaming configuration
+# Camera streaming configuration (teleop: usb_cam /image_raw → mqtt_bridge WebRTC; image_proc off by default)
 camera:
   # ROS2 image topic to stream via WebRTC
   image_topic: "/image_raw"
@@ -87,7 +87,7 @@ camera:
   # - "nv12": Common hardware-accelerated format
   format: "yuv420p"
   encoding: "rgb8"
-  fps: 15 # Match webrtc.fps and camera framerate
+  fps: 15 # Match webrtc.fps; lower both if USB or network is congested
   image_width: 640 # Match actual camera resolution
   image_height: 480 # Match actual camera resolution
   # Hardware camera settings for ugv_vision (usb_cam)

@@ -1,9 +1,10 @@
 /mqtt_bridge_node:
   ros__parameters:
     broker:
-      host: mqtt.cyberwave.com
-      # Port 8883: TLS encrypted (recommended, auto-enabled with SDK)
-      # Port 1883: Plain TCP (legacy, not recommended)
+      # Leave empty so CYBERWAVE_MQTT_HOST from edge-core wins (local broker, etc.)
+      host: ""
+      # Default when CYBERWAVE_MQTT_PORT is unset. At runtime edge-core sets
+      # CYBERWAVE_MQTT_PORT (e.g. 1883 local); that env var always wins over this.
       port: 8883
       # username: ""
       # password: ""
@@ -11,6 +12,8 @@
       # When true, uses direct paho-mqtt connection with username/password (legacy)
       use_paho_direct: false
       use_cyberwave: true # Enable Cyberwave SDK for upstream publishing
+    # Set via CYBERWAVE_API_KEY / CYBERWAVE_TOKEN from edge-core (do not bake tokens in image)
+    cyberwave_token: ""
     topic_prefix: "" # for production set ""
     prevent_duplicate_offers: true # Do not re-send offers while a connection is alive
     # Note: Robot-specific camera settings (image_topic, resolution, fps, etc.) are in
@@ -24,8 +27,14 @@
       auto_start: true
       auto_start_delay_sec: 10.0 # Delay before starting (allows hardware to settle)
       auto_start_retry_sec: 5.0 # Retry interval if prerequisites not ready
+      # Lower manually (e.g. 10 or 5) if Pi USB or network is congested; no auto-adapt yet
       fps: 15.0
       force_turn: true # Force all WebRTC traffic through TURN relay (bypasses NAT/firewall)
+
+    # usb_cam overrides merged in master_beast.launch.py (teleop: /image_raw only, no image_proc)
+    camera:
+      pixel_format: "yuyv"
+      io_method: "mmap"
 
     # Global kill-switch for all upstream MQTT traffic (ROS -> MQTT)
     # If true, no telemetry, status, or health messages will be sent to the cloud.

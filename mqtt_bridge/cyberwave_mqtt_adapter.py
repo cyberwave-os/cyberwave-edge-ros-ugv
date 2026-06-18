@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import json
 import asyncio
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -74,6 +75,8 @@ class CyberwaveAdapter:
         broker: str = "mqtt.cyberwave.com",
         port: int = 8883,  # TLS auto-enabled for port 8883
         api_token: Optional[str] = None,
+        base_url: Optional[str] = None,
+        mqtt_use_tls: Optional[bool] = None,
         topic_prefix: str = "",
         auto_connect: bool = True,
         logger: Optional[Any] = None,
@@ -125,12 +128,19 @@ class CyberwaveAdapter:
             self._logger.info(f"Using API token: {api_token[:8]}...")
             self._logger.info(f"Using topic_prefix: '{topic_prefix or ''}'")
 
+            effective_tls = (
+                mqtt_use_tls if mqtt_use_tls is not None else int(port) == 8883
+            )
+            effective_base_url = base_url or os.getenv("CYBERWAVE_BASE_URL")
+
             # Initialize the Cyberwave SDK client with topic_prefix
             # The SDK will create an MQTT client internally and manage the connection
             cw = Cyberwave(
                 api_key=api_token,
+                base_url=effective_base_url,
                 mqtt_host=broker,
                 mqtt_port=port,
+                mqtt_use_tls=effective_tls,
                 topic_prefix=topic_prefix or "",
             )
 

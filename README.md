@@ -53,7 +53,7 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f docker-conf/Dockerfile \
   --build-arg UGV_DRIVER_BASE_IMAGE=cyberwaveos/ugv-driver:base-dev \
-  --build-arg CYBERWAVE_SDK_VERSION=0.3.44 \
+  --build-arg CYBERWAVE_SDK_VERSION=0.5.0 \
   -t cyberwaveos/ugv-driver:dev \
   --push .
 ```

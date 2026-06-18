@@ -1,5 +1,37 @@
 # syntax=docker/dockerfile:1.4
 # ============================================================================
+# OPTIMIZED MULTI-STAGE UGV DRIVER BUILD (Dockerfile.optimized)
+# ============================================================================
+# Restored from the layered build introduced in commits 1b810f1e6 / 5fdfdd991.
+# The multi-stage pattern was never committed as a separate file; it lived in
+# docker-conf/Dockerfile. This file is the explicit optimized variant for
+# cache-friendly CI and local rebuilds.
+#
+# Stages:
+#   ugv_driver_base  - apt + pinned WebRTC/Python deps (build once, push, reuse)
+#   runtime_base     - SDK install only (fast SDK bumps)
+#   runtime          - ugv_ws clone, mqtt_bridge copy, colcon builds
+#
+# NOTE: the build context is cyberwave-edge-nodes (the parent dir), so the
+# shared cyberwave-edge-common package is in scope. Cyberwave SDK is installed
+# from PyPI in the runtime_base stage (CYBERWAVE_SDK_VERSION, default 0.5.0).
+#
+# Build/publish base once:
+#   docker buildx build --target ugv_driver_base \
+#     -f cyberwave-edge-ros-ugv/docker-conf/Dockerfile.optimized \
+#     -t cyberwaveos/ugv-driver:base-dev --push .
+#
+# Fast rebuild (SDK or mqtt_bridge changes only):
+#   docker buildx build \
+#     --build-arg UGV_DRIVER_BASE_IMAGE=cyberwaveos/ugv-driver:base-dev \
+#     --build-arg CYBERWAVE_SDK_VERSION=0.5.0 \
+#     -f cyberwave-edge-ros-ugv/docker-conf/Dockerfile.optimized \
+#     -t cyberwaveos/ugv-driver:dev --push .
+#
+# Build from cyberwave-edge-nodes:
+#   docker build -f cyberwave-edge-ros-ugv/docker-conf/Dockerfile.optimized -t cyberwaveos/ugv-driver:latest .
+#
+# ============================================================================
 # Cyberwave UGV Beast Image with MQTT Bridge Integration
 # ============================================================================
 # This Dockerfile adapts the dudulrx0601/ugv_rpi_ros_humble base image 
@@ -15,8 +47,8 @@
 #   - SSH configured: Port 23, PermitRootLogin yes
 #   - ROS2 sourced in bashrc
 #
-# Build from cyberwave-edge-nodes:
-#   docker build -f cyberwave-edge-ros-ugv/docker-conf/Dockerfile -t cyberwaveos/ugv-driver:latest .
+# Build from cyberwave-edge-nodes/cyberwave-edge-ros-ugv:
+#   docker build -f docker-conf/Dockerfile -t cyberwaveos/ugv-driver:latest .
 #
 # ============================================================================
 
@@ -192,8 +224,8 @@ WORKDIR /home/ws/ugv_ws
 # ============================================================================
 # STAGE 8: Copy MQTT Bridge Integration
 # ============================================================================
-# Note: Build context is mqtt_bridge directory
-# Excludes docker-conf/, docs/, .env, README.md via .dockerignore
+# Note: Build context is cyberwave-edge-nodes (so cyberwave-edge-common is in
+# scope alongside cyberwave-edge-ros-ugv). Keep in sync with docker-conf/Dockerfile.
 # The cloned ugv_ws repo already has ugv_main/ugv_bringup structure
 
 # Cache buster - pass --build-arg CACHEBUST=$(date +%s) to force rebuild from here

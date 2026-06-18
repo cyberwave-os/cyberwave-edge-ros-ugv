@@ -120,24 +120,50 @@ def _paho_on_message(client, userdata, msg) -> None:
         node.get_logger().error(f"Exception in on_message handler: {e}")
 
 
+def _strip_topic_prefix(value: typing.Any) -> str:
+    """Strip whitespace and trailing ``/`` for ``{prefix}cyberwave/...`` topics."""
+    if not value:
+        return ""
+    return str(value).strip().rstrip("/")
+
+
 class MQTTBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__("mqtt_bridge_node")
         self._start_time = time.time()
 
+        from .edge_driver_env import (
+            apply_resolved_mqtt_to_environ,
+            load_edge_driver_env,
+            log_edge_driver_env,
+            resolve_broker_host,
+            resolve_broker_port,
+            resolve_mqtt_topic_prefix,
+        )
+
+        self._edge_env = load_edge_driver_env()
+        log_edge_driver_env(self.get_logger(), self._edge_env)
+        self._child_twin_uuids = list(self._edge_env.child_twin_uuids)
+        twin_json = self._edge_env.load_twin_json()
+        if twin_json is not None:
+            self.get_logger().info(
+                "Loaded twin metadata from CYBERWAVE_TWIN_JSON_FILE "
+                f"({self._edge_env.twin_json_file})"
+            )
+        elif self._edge_env.twin_json_file:
+            self.get_logger().warning(
+                f"CYBERWAVE_TWIN_JSON_FILE set but not readable: "
+                f"{self._edge_env.twin_json_file}"
+            )
+
         # Configuration is loaded from params.yaml via ROS parameter server
         # Environment variables can still override via os.getenv() fallbacks below
-
-        # Log Cyberwave configuration for debugging
-        self.get_logger().info("--- Cyberwave Configuration ---")
 
         # declare parameters with sensible defaults
         # declare scalar broker settings (ROS parameter server flattens YAML
         # mappings into dotted parameter names when loaded) and avoid
         # declaring dict defaults which rclpy does not accept.
-        mqtt_broker_env = os.getenv("CYBERWAVE_MQTT_HOST") or os.getenv(
-            "CYBERWAVE_MQTT_BROKER"
-        )
+        mqtt_broker_env = self._edge_env.mqtt_host or None
 
         # rclpy's declare_parameter API warns when a parameter is declared
         # without an explicit default value. Ensure we always pass a concrete
@@ -146,7 +172,10 @@ class MQTTBridgeNode(Node):
         self.declare_parameter(
             "broker.host", mqtt_broker_env if mqtt_broker_env is not None else ""
         )
-        self.declare_parameter("broker.port", 8883)  # TLS auto-enabled for port 8883
+        _default_broker_port = (
+            self._edge_env.mqtt_port_int if self._edge_env.mqtt_port_int else 1883
+        )
+        self.declare_parameter("broker.port", _default_broker_port)
         self.declare_parameter("broker.use_paho_direct", False)
         self.declare_parameter("broker.username", "")
         self.declare_parameter("broker.password", "")
@@ -155,25 +184,12 @@ class MQTTBridgeNode(Node):
 
         # Get values from parameters (which are loaded from params.yaml)
         p_token = self.get_parameter("cyberwave_token").value
-        p_host = self.get_parameter("broker.host").value
-        p_env = self.get_parameter("topic_prefix").value
 
-        # Fallback to environment variables if parameters are empty
-        token = (
-            p_token or os.getenv("CYBERWAVE_API_KEY") or os.getenv("CYBERWAVE_TOKEN")
-        )
-        host = p_host or mqtt_broker_env
-        env = p_env or os.getenv("CYBERWAVE_ENVIRONMENT")
-        uuid = os.getenv("CYBERWAVE_EDGE_UUID")
-
-        self.get_logger().info(f"CYBERWAVE_TOKEN: {token if token else 'NOT SET'}")
-        self.get_logger().info(f"CYBERWAVE_MQTT_BROKER: {host if host else 'NOT SET'}")
-        self.get_logger().info(f"CYBERWAVE_ENVIRONMENT: {env if env else 'NOT SET'}")
-        self.get_logger().info(f"CYBERWAVE_EDGE_UUID: {uuid if uuid else 'NOT SET'}")
-        self.get_logger().info("-------------------------------")
+        # Fallback to edge-core env, then ROS params
+        token = p_token or self._edge_env.api_key
 
         # Debug logging parameter - enables verbose logging for aiortc, aioice, etc.
-        self.declare_parameter("debug_logs", False)
+        self.declare_parameter("debug_logs", self._edge_env.debug_logs_enabled)
         debug_logs_enabled = self.get_parameter("debug_logs").value
 
         # Configure logging levels based on debug_logs parameter
@@ -234,16 +250,41 @@ class MQTTBridgeNode(Node):
         self.declare_parameter("mqtt_command_qos", 1)
         self._mqtt_command_qos = self.get_parameter("mqtt_command_qos").value
 
-        # try reading the simple scalar broker params
+        # Broker endpoint: CYBERWAVE_MQTT_* from edge-core wins over params.yaml
+        # (e.g. params broker.port: 8883 must not override CYBERWAVE_MQTT_PORT=1883).
         host_param = self.get_parameter("broker.host").value
         port_param = self.get_parameter("broker.port").value
         username_param = self.get_parameter("broker.username").value
         password_param = self.get_parameter("broker.password").value
-        host = host_param or mqtt_broker_env or "mqtt.cyberwave.com"
-        try:
-            port = int(port_param) if port_param is not None else 8883
-        except Exception:
-            port = 8883
+        host, host_source = resolve_broker_host(host_param, self._edge_env)
+        port, port_source = resolve_broker_port(port_param, self._edge_env)
+        if self._edge_env.mqtt_port and port_param is not None:
+            try:
+                yaml_port = int(port_param)
+            except (TypeError, ValueError):
+                yaml_port = None
+            if yaml_port is not None and yaml_port != port:
+                self.get_logger().info(
+                    f"broker.port from params.yaml ({yaml_port}) overridden by "
+                    f"CYBERWAVE_MQTT_PORT={port}"
+                )
+        if self._edge_env.mqtt_host and host_param and str(host_param).strip() != host:
+            self.get_logger().info(
+                f"broker.host from params.yaml ({host_param!r}) overridden by "
+                f"CYBERWAVE_MQTT_HOST={host!r}"
+            )
+        self.get_logger().info(
+            f"MQTT broker endpoint: {host}:{port} "
+            f"(host from {host_source}, port from {port_source})"
+        )
+
+        mqtt_use_tls = self._edge_env.mqtt_use_tls
+        apply_resolved_mqtt_to_environ(
+            host,
+            port,
+            api_key=token or self._edge_env.api_key,
+            use_tls=mqtt_use_tls,
+        )
 
         # Store broker credentials
         username = username_param if username_param else None
@@ -287,27 +328,6 @@ class MQTTBridgeNode(Node):
                     ):
                         ros_params = raw["/mqtt_bridge_node"]["ros__parameters"]
                         bridge = ros_params.get("bridge", {}) or {}
-
-                        # Also read broker settings from YAML as fallback.
-                        # ROS2 params may not be loaded if --params-file
-                        # isn't passed at launch (e.g. when started by edge core).
-                        yaml_broker = ros_params.get("broker", {}) or {}
-                        if yaml_broker.get("host") and not host_param:
-                            host = yaml_broker["host"]
-                            self.get_logger().info(
-                                f"Broker host from YAML config: {host}"
-                            )
-                        if yaml_broker.get("port") is not None and port_param is None:
-                            try:
-                                port = int(yaml_broker["port"])
-                            except (ValueError, TypeError):
-                                pass
-                        yaml_user = yaml_broker.get("username")
-                        yaml_pass = yaml_broker.get("password")
-                        if yaml_user and not username:
-                            username = yaml_user
-                        if yaml_pass and not password:
-                            password = yaml_pass
 
                         ros2mqtt_topics = bridge.get("ros2mqtt", {}).get(
                             "ros_topics", []
@@ -519,27 +539,10 @@ class MQTTBridgeNode(Node):
             f"Broker configuration: host={host}, port={port}, user={username}, use_cyberwave={use_cw}"
         )
 
+        self._set_topic_prefixes(resolve_mqtt_topic_prefix())
+
         self._mqtt_adapter = None
         if use_cw and CyberwaveAdapter is not None:
-            # Determine topic prefix based on environment or parameter
-            try:
-                env_env = os.getenv("CYBERWAVE_ENVIRONMENT")
-                param_prefix = self.get_parameter("topic_prefix").value
-
-                if env_env is not None:
-                    chosen_prefix = "" if env_env == "production" else env_env
-                else:
-                    chosen_prefix = "" if param_prefix == "production" else param_prefix
-
-                chosen_prefix = chosen_prefix.strip() if chosen_prefix else ""
-                chosen_prefix = chosen_prefix.rstrip("/") if chosen_prefix else ""
-
-                self.topic_prefix = chosen_prefix
-                self.ros_prefix = self.topic_prefix
-            except Exception:
-                self.topic_prefix = ""
-                self.ros_prefix = ""
-
             if token:
                 try:
                     self.get_logger().info("=" * 60)
@@ -549,6 +552,8 @@ class MQTTBridgeNode(Node):
                         broker=host,
                         port=port,
                         api_token=token,
+                        base_url=self._edge_env.base_url or None,
+                        mqtt_use_tls=mqtt_use_tls,
                         topic_prefix=self.topic_prefix,
                         auto_connect=True,
                         logger=self.get_logger(),
@@ -569,12 +574,13 @@ class MQTTBridgeNode(Node):
                     self.get_logger().warning("Will fall back to paho-mqtt client")
             else:
                 self.get_logger().error(
-                    "Cyberwave API Token not found! 'use_cyberwave' is enabled but no token was provided via parameters or environment (CYBERWAVE_TOKEN). Video streaming will be unavailable."
+                    "Cyberwave API token not found! 'use_cyberwave' is enabled but no "
+                    "token was provided via parameters or CYBERWAVE_API_KEY / "
+                    "CYBERWAVE_TOKEN. Video streaming will be unavailable."
                 )
 
         # create paho MQTT client and callbacks (fallback)
         self._mqtt_client = mqtt.Client()
-        self._mqtt_client.topic_prefix = self.topic_prefix
         self._mqtt_client.user_data_set(self)
         self._mqtt_client.on_connect = _paho_on_connect
         self._mqtt_client.on_message = _paho_on_message
@@ -585,28 +591,8 @@ class MQTTBridgeNode(Node):
                 f"MQTT authentication configured for user: {username}"
             )
 
-        # topic prefix used by helper methods (keeps topic naming consistent)
-        # Ensure topic_prefix is defined even if the adapter wasn't created.
-        if not hasattr(self, "topic_prefix"):
-            try:
-                env_env = os.getenv("CYBERWAVE_ENVIRONMENT")
-                param_prefix = self.get_parameter("topic_prefix").value
-
-                if env_env is not None:
-                    chosen_prefix = "" if env_env == "production" else env_env
-                else:
-                    chosen_prefix = "" if param_prefix == "production" else param_prefix
-
-                chosen_prefix = chosen_prefix.strip() if chosen_prefix else ""
-                chosen_prefix = chosen_prefix.rstrip("/") if chosen_prefix else ""
-
-                self.topic_prefix = chosen_prefix
-                self.ros_prefix = self.topic_prefix
-
-                self.get_logger().info(f"Topic prefix set to: '{self.topic_prefix}'")
-            except Exception:
-                self.topic_prefix = ""
-                self.ros_prefix = ""
+        # Keep paho client in sync (created after _set_topic_prefixes above).
+        self._mqtt_client.topic_prefix = self.topic_prefix
 
         # Mapping support (per-robot json_by_name mappings)
         # declare mapping-related params
@@ -1143,6 +1129,16 @@ class MQTTBridgeNode(Node):
         # subscribe to configured MQTT topics once connected (on_connect will re-subscribe)
         # Ping handling is intentionally omitted here (no _on_ping callback).
 
+    def _set_topic_prefixes(self, prefix: str) -> None:
+        """Set ``topic_prefix`` and ``ros_prefix`` together for ``{prefix}cyberwave/...``."""
+        self.topic_prefix = prefix
+        self.ros_prefix = self.topic_prefix
+        example_topic = f"{self.topic_prefix}cyberwave/twin/<uuid>/command"
+        self.get_logger().info(
+            f"MQTT topic prefix: '{self.topic_prefix}' "
+            f"(ros_prefix='{self.ros_prefix}', example: {example_topic})"
+        )
+
     def _get_virtual_joints(self) -> typing.Set[str]:
         """Return a set of joint names that are used for virtual IO/control."""
         if not hasattr(self, "_io_config") or not self._io_config:
@@ -1549,11 +1545,10 @@ class MQTTBridgeNode(Node):
         """Attempt to initialise the command registry from the mapping.
 
         Returns True if the registry is ready (already initialised or
-        successfully created), False otherwise.  Safe to call repeatedly;
-        after ``_MAX_REGISTRY_INIT_ATTEMPTS`` consecutive failures the
-        method stops retrying and logs an error.
+        successfully created), False otherwise. Safe to call repeatedly;
+        logs verbose tracebacks for the first few failures, then rate-limits.
         """
-        _MAX_REGISTRY_INIT_ATTEMPTS = 5
+        _MAX_VERBOSE_ATTEMPTS = 5
 
         if self._command_registry is not None:
             return True
@@ -1564,8 +1559,6 @@ class MQTTBridgeNode(Node):
             return False
 
         self._command_registry_init_attempts += 1
-        if self._command_registry_init_attempts > _MAX_REGISTRY_INIT_ATTEMPTS:
-            return False
 
         try:
             registry_path = self._mapping.command_registry
@@ -1603,20 +1596,33 @@ class MQTTBridgeNode(Node):
             )
             return True
         except Exception as e:
+            import time
             import traceback
+
             attempt = self._command_registry_init_attempts
-            self.get_logger().error(
-                f"Could not initialize command registry from "
-                f"{self._mapping.command_registry} (attempt {attempt}/"
-                f"{_MAX_REGISTRY_INIT_ATTEMPTS}): {e}\n{traceback.format_exc()}"
-            )
-            if attempt >= _MAX_REGISTRY_INIT_ATTEMPTS:
+            if attempt <= _MAX_VERBOSE_ATTEMPTS:
                 self.get_logger().error(
-                    "Max command registry init attempts reached. "
-                    "Commands will NOT be processed. Check that the "
-                    "command_registry class path in the mapping YAML is "
-                    "correct and all dependencies are installed."
+                    f"Could not initialize command registry from "
+                    f"{self._mapping.command_registry} (attempt {attempt}/"
+                    f"{_MAX_VERBOSE_ATTEMPTS}): {e}\n{traceback.format_exc()}"
                 )
+                if attempt == _MAX_VERBOSE_ATTEMPTS:
+                    self.get_logger().error(
+                        "Command registry init still failing after "
+                        f"{_MAX_VERBOSE_ATTEMPTS} attempts. Will keep retrying "
+                        "on incoming commands with reduced logging. Check that "
+                        "the command_registry class path in the mapping YAML is "
+                        "correct and all dependencies are installed."
+                    )
+            else:
+                now = time.time()
+                last_log = getattr(self, "_last_registry_retry_log_ts", 0.0)
+                if now - last_log >= 60.0:
+                    self._last_registry_retry_log_ts = now
+                    self.get_logger().warning(
+                        "Command registry init still failing "
+                        f"(attempt {attempt}): {e}"
+                    )
             return False
 
     def _load_mapping(self) -> None:
@@ -1663,13 +1669,14 @@ class MQTTBridgeNode(Node):
             else:
                 self._internal_odom = None
 
-            if not self._mapping.twin_uuid:
-                env_uuid = os.getenv("CYBERWAVE_TWIN_UUID")
-                if env_uuid:
-                    self._mapping.twin_uuid = env_uuid
-                    self.get_logger().info(
-                        f"twin_uuid set from CYBERWAVE_TWIN_UUID env var: {env_uuid}"
-                    )
+            if self._edge_env.twin_uuid:
+                self._mapping.twin_uuid = self._edge_env.twin_uuid
+            elif os.getenv("CYBERWAVE_TWIN_UUID"):
+                self._mapping.twin_uuid = os.getenv("CYBERWAVE_TWIN_UUID")
+                self.get_logger().info(
+                    f"twin_uuid set from CYBERWAVE_TWIN_UUID env var: "
+                    f"{self._mapping.twin_uuid}"
+                )
 
             try:
                 require_uuid = bool(
@@ -3573,16 +3580,16 @@ class MQTTBridgeNode(Node):
                     "Camera WebRTC stream stopped (track remains active for pre-caching)"
                 )
 
-                # Notify frontend that video has stopped using requested format
+                # Notify frontend (ROS service / direct stop paths without actuation handler)
                 twin_uuid = getattr(self._mapping, "twin_uuid", None)
                 if twin_uuid:
                     topic = f"{self.topic_prefix}cyberwave/twin/{twin_uuid}/command"
                     payload = {
-                        "command": "start_video",
+                        "command": "stop_video",
                         "type": "response",
                         "source_type": "edge",
-                        "status": "success",
-                        "data": {"status": "success", "type": "video_stopped"},
+                        "status": "ok",
+                        "data": {"status": "ok", "type": "video_stopped"},
                     }
                     self.publish(topic, payload)
                     self.get_logger().info(

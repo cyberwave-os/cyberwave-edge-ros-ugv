@@ -17,6 +17,9 @@ from aioice import Connection, TransportPolicy
 
 logger = logging.getLogger(__name__)
 
+# ROS sensor_msgs / usb_cam encodings treated as packed YUYV (no BGR in callback).
+_YUYV_ENCODINGS = frozenset({"yuyv", "yuv422_yuy2"})
+
 
 class RelayOnlyRTCIceGatherer(RTCIceGatherer):
     """
@@ -73,6 +76,7 @@ class ROSVideoStreamTrack(BaseVideoTrack):
         self.fps = fps
         self.encoding = "yuv420p"
         self.latest_frame = None
+        self.latest_frame_encoding: Optional[str] = None
         self._frame_lock = threading.Lock()
         self._last_time = None
         self._last_log_time = 0
@@ -105,30 +109,30 @@ class ROSVideoStreamTrack(BaseVideoTrack):
             if self.latest_frame is None:
                 self.node.get_logger().info(f"FIRST FRAME on {self.topic}!")
 
-            # Handle different image encodings
-            if msg.encoding in ['yuyv', 'yuv422_yuy2']:
-                # Convert YUYV to BGR (yuv422_yuy2 is the ROS standard name for YUYV)
-                raw_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 2))
-                bgr_frame = cv2.cvtColor(raw_data, cv2.COLOR_YUV2BGR_YUYV)
-            elif msg.encoding in ['rgb8', 'bgr8']:
-                # Already in RGB/BGR format from MJPEG decoding
-                raw_data = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
-                if msg.encoding == 'rgb8':
-                    bgr_frame = cv2.cvtColor(raw_data, cv2.COLOR_RGB2BGR)
-                else:
-                    bgr_frame = raw_data
+            # Store native ROS payload; convert to yuv420p only in recv() (stream rate).
+            if msg.encoding in _YUYV_ENCODINGS:
+                frame_buffer = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                    (msg.height, msg.width, 2)
+                )
+                frame_encoding = "yuyv"
+            elif msg.encoding in ("rgb8", "bgr8"):
+                frame_buffer = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                    (msg.height, msg.width, 3)
+                )
+                frame_encoding = msg.encoding
             else:
                 self.node.get_logger().error(f"Unsupported image encoding: {msg.encoding}")
                 return
-            
-            # Ensure even dimensions for H.264
-            h, w = bgr_frame.shape[:2]
+
+            # H.264 / yuv420p require even width and height.
+            h, w = frame_buffer.shape[:2]
             if h % 2 != 0 or w % 2 != 0:
-                bgr_frame = bgr_frame[:h & ~1, :w & ~1]
-            
+                frame_buffer = frame_buffer[: h & ~1, : w & ~1]
+
             with self._frame_lock:
-                self.latest_frame = np.ascontiguousarray(bgr_frame, dtype=np.uint8)
-                self.actual_height, self.actual_width = bgr_frame.shape[:2]
+                self.latest_frame = np.ascontiguousarray(frame_buffer, dtype=np.uint8)
+                self.latest_frame_encoding = frame_encoding
+                self.actual_height, self.actual_width = frame_buffer.shape[:2]
                 self._frames_received += 1
                 if hasattr(self.node, '_last_image_time'):
                     self.node._last_image_time = now
@@ -166,6 +170,30 @@ class ROSVideoStreamTrack(BaseVideoTrack):
         """Check if any frames have been received."""
         return self._frame_ready_event.is_set()
 
+    def get_latest_frame_bgr(self) -> Optional[np.ndarray]:
+        """Return the latest frame as BGR for JPEG snapshot (take_photo)."""
+        with self._frame_lock:
+            frame_data = self.latest_frame
+            encoding = self.latest_frame_encoding
+        if frame_data is None or encoding is None:
+            return None
+        if encoding in _YUYV_ENCODINGS or encoding == "yuyv":
+            return cv2.cvtColor(frame_data, cv2.COLOR_YUV2BGR_YUYV)
+        if encoding == "rgb8":
+            return cv2.cvtColor(frame_data, cv2.COLOR_RGB2BGR)
+        return frame_data.copy()
+
+    @staticmethod
+    def _to_yuv420p_video_frame(frame_data: np.ndarray, encoding: str) -> VideoFrame:
+        if encoding in _YUYV_ENCODINGS or encoding == "yuyv":
+            video_frame = VideoFrame.from_ndarray(frame_data, format="yuyv422")
+        elif encoding == "rgb8":
+            bgr = cv2.cvtColor(frame_data, cv2.COLOR_RGB2BGR)
+            video_frame = VideoFrame.from_ndarray(bgr, format="bgr24")
+        else:
+            video_frame = VideoFrame.from_ndarray(frame_data, format="bgr24")
+        return video_frame.reformat(format="yuv420p")
+
     async def recv(self):
         # Wait for at least one frame to be ready before starting WebRTC streaming
         if self.frame_count == 0:
@@ -196,14 +224,16 @@ class ROSVideoStreamTrack(BaseVideoTrack):
         
         with self._frame_lock:
             frame_data = self.latest_frame
+            frame_encoding = self.latest_frame_encoding
             frames_received = self._frames_received
-        
+
         if frame_data is None:
             # Create blank gray frame if no data available
             self.node.get_logger().warning(
                 f"Frame {self.frame_count}: No frame data available, sending blank frame (received {frames_received} total)"
             )
             frame_data = np.full((self.actual_height, self.actual_width, 3), 128, dtype=np.uint8)
+            frame_encoding = "bgr8"
         elif self.frame_count == 1:
             self.node.get_logger().info(
                 f"Starting WebRTC stream with cached frame (received {frames_received} frames so far)"
@@ -221,15 +251,21 @@ class ROSVideoStreamTrack(BaseVideoTrack):
             self.frame_0_timestamp = now
             self.frame_0_timestamp_monotonic = now_monotonic
 
-        frame = VideoFrame.from_ndarray(frame_data, format="bgr24")
-        frame = frame.reformat(format="yuv420p")
+        frame = self._to_yuv420p_video_frame(frame_data, frame_encoding or "bgr8")
         frame.pts = pts
         frame.time_base = time_base
 
         # Capture sync frame data so the SDK can publish a camera_sync_frame MQTT
         # message after streaming starts. This anchor is required for the backend to
         # correctly trim and timestamp the recording for Replay.
-        self._capture_sync_frame(now, now_monotonic, pts)
+        self._capture_sync_frame(
+            now,
+            now_monotonic,
+            frame_index=self.frame_count,
+            pts=pts,
+            time_base_num=time_base.numerator,
+            time_base_den=time_base.denominator,
+        )
 
         # Keyframe every 4 seconds or first 10 frames
         if self.frame_count % (int(self.fps) * 4) == 1 or self.frame_count < 10:

@@ -35,6 +35,21 @@ class CommandHandler(ABC):
         except Exception:
             return None
 
+    def _resolve_ros_topic(self, topic: str) -> str:
+        resolver = getattr(self.node, "resolve_ros_topic", None)
+        if callable(resolver):
+            try:
+                return resolver(topic)
+            except Exception:
+                pass
+        return topic
+
+    def create_ros_publisher(
+        self, msg_type: type, topic: str, qos: int
+    ) -> Publisher:
+        resolved_topic = self._resolve_ros_topic(topic)
+        return self.node.create_publisher(msg_type, resolved_topic, qos)
+
     def publish_response(self, response_data: Dict[str, Any]) -> bool:
         if not self._mqtt_adapter:
             self.logger.warning("Cannot publish response: MQTT adapter not set")

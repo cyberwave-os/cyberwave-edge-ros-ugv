@@ -181,6 +181,7 @@ class MQTTBridgeNode(Node):
         self.declare_parameter("broker.password", "")
         self.declare_parameter("cyberwave_token", "")
         self.declare_parameter("topic_prefix", "")
+        self.declare_parameter("ros_namespace", "")
 
         # Get values from parameters (which are loaded from params.yaml)
         p_token = self.get_parameter("cyberwave_token").value
@@ -849,30 +850,37 @@ class MQTTBridgeNode(Node):
                 depth=10,
             )
 
-            self.get_logger().info(f"Bridge ROS -> MQTT: {ros_topic} -> {mqtt_topic}")
+            resolved_ros_topic = self.resolve_ros_topic(ros_topic)
+            self.get_logger().info(
+                f"Bridge ROS -> MQTT: {resolved_ros_topic} -> {mqtt_topic}"
+            )
             sub = self.create_subscription(
                 msg_cls,
-                ros_topic,
-                self._make_ros_cb(ros_topic, mqtt_topic, msg_cls),
+                resolved_ros_topic,
+                self._make_ros_cb(resolved_ros_topic, mqtt_topic, msg_cls),
                 qos,
             )
-            self._ros2mqtt_map[ros_topic] = mqtt_topic
+            self._ros2mqtt_map[resolved_ros_topic] = mqtt_topic
             # capture optional sdk_method hint from params.yaml so the
             # bridge can call SDK helpers (e.g., update_joint_state)
             sdk_method = (
                 mapping.get("sdk_method") if isinstance(mapping, dict) else None
             )
             if sdk_method:
-                self._ros2mqtt_sdk_method[ros_topic] = sdk_method
-            self._ros2mqtt_msgtypes[ros_topic] = msg_cls
+                self._ros2mqtt_sdk_method[resolved_ros_topic] = sdk_method
+            self._ros2mqtt_msgtypes[resolved_ros_topic] = msg_cls
 
             # capture optional custom rate limit or interval for this topic
             custom_rate = mapping.get("rate") or mapping.get("rate_limit")
             custom_interval = mapping.get("interval")
             if custom_rate is not None:
-                self._ros2mqtt_custom_intervals[ros_topic] = 1.0 / float(custom_rate)
+                self._ros2mqtt_custom_intervals[resolved_ros_topic] = 1.0 / float(
+                    custom_rate
+                )
             elif custom_interval is not None:
-                self._ros2mqtt_custom_intervals[ros_topic] = float(custom_interval)
+                self._ros2mqtt_custom_intervals[resolved_ros_topic] = float(
+                    custom_interval
+                )
 
         # parse mqtt2ros mappings (MQTT -> ROS)
         mqtt2ros = bridge.get("mqtt2ros", {})
@@ -941,9 +949,7 @@ class MQTTBridgeNode(Node):
                         sdk_methods.append(sdk_method)
 
                     # Process this mapping entry (ros_topic should be a single string in multi-target configs)
-                    rt_name = (
-                        ros_topic if ros_topic.startswith("/") else f"/{ros_topic}"
-                    )
+                    rt_name = self.resolve_ros_topic(ros_topic)
                     self.get_logger().info(f"  Target: {rt_name} ({msg_cls.__name__})")
                     existing = self._ros_topic_msgtype.get(rt_name)
                     if existing is not None and existing is not msg_cls:
@@ -978,7 +984,7 @@ class MQTTBridgeNode(Node):
                         f"Creating MQTT->ROS bridge: {mqtt_topic} -> {ros_topic} ({msg_cls.__name__})"
                     )
                     for rt in ros_topic:
-                        rt_name = rt if rt.startswith("/") else f"/{rt}"
+                        rt_name = self.resolve_ros_topic(rt)
                         existing = self._ros_topic_msgtype.get(rt_name)
                         if existing is not None and existing is not msg_cls:
                             self.get_logger().error(
@@ -996,9 +1002,7 @@ class MQTTBridgeNode(Node):
                         self._ros_topic_msgtype[rt_name] = msg_cls
                 else:
                     # Handle single topic case
-                    rt_name = (
-                        ros_topic if ros_topic.startswith("/") else f"/{ros_topic}"
-                    )
+                    rt_name = self.resolve_ros_topic(ros_topic)
                     self.get_logger().info(
                         f"Creating MQTT->ROS bridge: {mqtt_topic} -> {rt_name} ({msg_cls.__name__})"
                     )
@@ -1032,7 +1036,10 @@ class MQTTBridgeNode(Node):
 
         # Subscribe to /joint_states to initialize accumulated state with current robot position
         self._joint_states_sub = self.create_subscription(
-            JointState, "/joint_states", self._on_joint_states, 10
+            JointState,
+            self.resolve_ros_topic("/joint_states"),
+            self._on_joint_states,
+            10,
         )
 
         # Initialize IO / Tool client if specified in mapping
@@ -1042,7 +1049,7 @@ class MQTTBridgeNode(Node):
             self._io_config = self._mapping.io_configuration
             for tool_name, config in self._io_config.items():
                 if config.get("enabled") and "service_name" in config:
-                    srv_name = config["service_name"]
+                    srv_name = self.resolve_ros_topic(config["service_name"])
                     srv_type_str = config.get("service_type", "std_srvs/srv/Trigger")
 
                     # Dynamically resolve service type if possible
@@ -1139,6 +1146,31 @@ class MQTTBridgeNode(Node):
             f"(ros_prefix='{self.ros_prefix}', example: {example_topic})"
         )
 
+    def _resolve_ros_namespace(self) -> str:
+        """Resolve ROS namespace override, defaulting to twin_uuid."""
+        try:
+            configured = str(self.get_parameter("ros_namespace").value or "").strip()
+        except Exception:
+            configured = ""
+        if configured:
+            return configured.strip("/")
+        mapping = getattr(self, "_mapping", None)
+        twin_uuid = getattr(mapping, "twin_uuid", None) if mapping is not None else None
+        return str(twin_uuid).strip("/") if twin_uuid else ""
+
+    def resolve_ros_topic(self, topic_name: str) -> str:
+        """Return a fully-qualified ROS topic in the active namespace."""
+        topic = str(topic_name or "").strip()
+        if not topic:
+            return topic
+        base_topic = topic.lstrip("/")
+        namespace = self._resolve_ros_namespace()
+        if not namespace:
+            return f"/{base_topic}"
+        if base_topic == namespace or base_topic.startswith(f"{namespace}/"):
+            return f"/{base_topic}"
+        return f"/{namespace}/{base_topic}"
+
     def _get_virtual_joints(self) -> typing.Set[str]:
         """Return a set of joint names that are used for virtual IO/control."""
         if not hasattr(self, "_io_config") or not self._io_config:
@@ -1180,6 +1212,7 @@ class MQTTBridgeNode(Node):
 
         Returns the publisher instance or None on failure.
         """
+        topic = self.resolve_ros_topic(topic)
         existing = self._ros_topic_msgtype.get(topic)
 
         if existing is not None and existing is not msg_cls:
@@ -1451,7 +1484,7 @@ class MQTTBridgeNode(Node):
         """
         # Determine ROS topic and message class from configured mappings
         pubs = self._mqtt2ros_pubs.get(mqtt_topic, [])
-        ros_topic = "/joint/commands"
+        ros_topic = self.resolve_ros_topic("/joint/commands")
         msg_cls = None
         if pubs:
             # Prefer a publisher that targets the canonical joint commands topic

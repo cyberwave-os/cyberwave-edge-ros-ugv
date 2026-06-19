@@ -127,10 +127,10 @@ class UGVBeastActuationHandler(CommandHandler):
     def _setup_publishers(self) -> None:
         """Create publishers for all possible actuation types."""
         # Movement
-        self._publishers["cmd_vel"] = self.node.create_publisher(Twist, "/cmd_vel", 10)
+        self._publishers["cmd_vel"] = self.create_ros_publisher(Twist, "/cmd_vel", 10)
 
         # Lights (UGV Beast specific, but safe to create)
-        self._publishers["led_ctrl"] = self.node.create_publisher(
+        self._publishers["led_ctrl"] = self.create_ros_publisher(
             Float32MultiArray, "/ugv/led_ctrl", 10
         )
 
@@ -495,7 +495,7 @@ class LightsHandler(CommandHandler):
         return "lights"
 
     def _setup_publishers(self) -> None:
-        self._publishers["led_ctrl"] = self.node.create_publisher(
+        self._publishers["led_ctrl"] = self.create_ros_publisher(
             Float32MultiArray, "/ugv/led_ctrl", 10
         )
 
@@ -605,7 +605,7 @@ class EmergencyStopHandler(CommandHandler):
         return "estop"
 
     def _setup_publishers(self) -> None:
-        self._publishers["estop"] = self.node.create_publisher(
+        self._publishers["estop"] = self.create_ros_publisher(
             Bool, "/emergency_stop", 10
         )
 
@@ -643,7 +643,7 @@ class OledCtrlHandler(CommandHandler):
         return "oled_ctrl"
 
     def _setup_publishers(self) -> None:
-        self._publishers["oled_ctrl"] = self.node.create_publisher(
+        self._publishers["oled_ctrl"] = self.create_ros_publisher(
             String, "/ugv/oled_ctrl", 10
         )
 
@@ -684,7 +684,7 @@ class JointTrajectoryHandler(CommandHandler):
         return "trajectory"
 
     def _setup_publishers(self) -> None:
-        self._publishers["trajectory"] = self.node.create_publisher(
+        self._publishers["trajectory"] = self.create_ros_publisher(
             JointTrajectory, "/scaled_joint_trajectory_controller/joint_trajectory", 10
         )
 
@@ -745,7 +745,7 @@ class GripperHandler(CommandHandler):
 
     def _setup_publishers(self) -> None:
         # Using String for simplicity - can be upgraded to service call
-        self._publishers["gripper"] = self.node.create_publisher(
+        self._publishers["gripper"] = self.create_ros_publisher(
             String, "/gripper/command", 10
         )
 
@@ -828,7 +828,7 @@ class CameraServoHandler(CommandHandler):
 
     def _setup_publishers(self) -> None:
         # UGV Beast uses /ugv/joint_states for servo control, not trajectory controller
-        self._publishers["joint_states"] = self.node.create_publisher(
+        self._publishers["joint_states"] = self.create_ros_publisher(
             JointState, "/ugv/joint_states", 10
         )
 

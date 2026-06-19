@@ -105,7 +105,7 @@ def test_move_forward_publishes_positive_linear_velocity(
     node: FakeNode = registry.node  # type: ignore[assignment]
     assert route_twin_command(registry, teleop_payload("move_forward")) is True
 
-    cmd_vel = node.publisher_for("/cmd_vel")
+    cmd_vel = node.publisher_for(node.resolve_ros_topic("/cmd_vel"))
     assert len(cmd_vel.messages) == 1
     twist = cmd_vel.messages[0]
     assert twist.linear.x > 0.0
@@ -117,7 +117,7 @@ def test_stop_publishes_zero_velocity(registry: CommandRegistry) -> None:
     assert route_twin_command(registry, teleop_payload("move_forward")) is True
     assert route_twin_command(registry, teleop_payload("stop")) is True
 
-    cmd_vel = node.publisher_for("/cmd_vel")
+    cmd_vel = node.publisher_for(node.resolve_ros_topic("/cmd_vel"))
     assert cmd_vel.messages
     twist = cmd_vel.messages[-1]
     assert twist.linear.x == 0.0
@@ -130,7 +130,7 @@ def test_turn_left_publishes_positive_angular_velocity(
     node: FakeNode = registry.node  # type: ignore[assignment]
     assert route_twin_command(registry, teleop_payload("turn_left")) is True
 
-    twist = node.publisher_for("/cmd_vel").messages[-1]
+    twist = node.publisher_for(node.resolve_ros_topic("/cmd_vel")).messages[-1]
     assert twist.linear.x == 0.0
     assert twist.angular.z > 0.0
 
@@ -139,7 +139,7 @@ def test_chassis_light_toggle_publishes_led_command(registry: CommandRegistry) -
     node: FakeNode = registry.node  # type: ignore[assignment]
     assert route_twin_command(registry, teleop_payload("chassis_light_toggle")) is True
 
-    led_pub = node.publisher_for("/ugv/led_ctrl")
+    led_pub = node.publisher_for(node.resolve_ros_topic("/ugv/led_ctrl"))
     assert len(led_pub.messages) == 1
     assert led_pub.messages[0].data[0] == 255.0
 
@@ -186,7 +186,7 @@ def test_locomotion_velocity_policy_publishes_twist(
     }
     assert route_twin_command(registry, payload) is True
 
-    twist = node.publisher_for("/cmd_vel").messages[-1]
+    twist = node.publisher_for(node.resolve_ros_topic("/cmd_vel")).messages[-1]
     assert twist.linear.x == 0.2
     assert twist.angular.z == 0.0
 
@@ -198,7 +198,7 @@ def test_combined_diagonal_uses_locomotion_contract(
     assert route_twin_command(registry, teleop_payload("move_forward")) is True
     assert route_twin_command(registry, teleop_payload("turn_right")) is True
 
-    twist = node.publisher_for("/cmd_vel").messages[-1]
+    twist = node.publisher_for(node.resolve_ros_topic("/cmd_vel")).messages[-1]
     assert twist.linear.x > 0.0
     assert twist.angular.z < 0.0
 

@@ -192,6 +192,18 @@ class FakeNode:
     def get_logger(self) -> FakeLogger:
         return FakeLogger()
 
+    def resolve_ros_topic(self, topic: str) -> str:
+        namespace = str(getattr(self._mapping, "twin_uuid", "") or "").strip("/")
+        raw = str(topic or "").strip()
+        if not raw:
+            return raw
+        base_topic = raw.lstrip("/")
+        if not namespace:
+            return f"/{base_topic}"
+        if base_topic == namespace or base_topic.startswith(f"{namespace}/"):
+            return f"/{base_topic}"
+        return f"/{namespace}/{base_topic}"
+
     def create_publisher(self, _msg_type: Any, topic: str, _qos: int) -> FakePublisher:
         publisher = FakePublisher()
         self._publishers_by_topic[topic] = publisher

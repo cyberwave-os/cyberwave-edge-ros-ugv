@@ -71,6 +71,7 @@ except ImportError:
 from rosidl_runtime_py.convert import message_to_ordereddict
 
 from .mapping import Mapping
+from .ros_topic_namespace import resolve_ros_namespace, resolve_ros_topic as _resolve_ros_topic
 from .plugins.ros_camera import ROSCameraStreamer
 from .plugins.navigation_bridge import NavigationBridge
 from .health import HealthPublisher
@@ -1149,27 +1150,19 @@ class MQTTBridgeNode(Node):
     def _resolve_ros_namespace(self) -> str:
         """Resolve ROS namespace override, defaulting to twin_uuid."""
         try:
-            configured = str(self.get_parameter("ros_namespace").value or "").strip()
+            configured = str(self.get_parameter("ros_namespace").value or "")
         except Exception:
             configured = ""
-        if configured:
-            return configured.strip("/")
         mapping = getattr(self, "_mapping", None)
         twin_uuid = getattr(mapping, "twin_uuid", None) if mapping is not None else None
-        return str(twin_uuid).strip("/") if twin_uuid else ""
+        return resolve_ros_namespace(
+            configured_namespace=configured,
+            twin_uuid=str(twin_uuid) if twin_uuid else None,
+        )
 
     def resolve_ros_topic(self, topic_name: str) -> str:
         """Return a fully-qualified ROS topic in the active namespace."""
-        topic = str(topic_name or "").strip()
-        if not topic:
-            return topic
-        base_topic = topic.lstrip("/")
-        namespace = self._resolve_ros_namespace()
-        if not namespace:
-            return f"/{base_topic}"
-        if base_topic == namespace or base_topic.startswith(f"{namespace}/"):
-            return f"/{base_topic}"
-        return f"/{namespace}/{base_topic}"
+        return _resolve_ros_topic(topic_name, self._resolve_ros_namespace())
 
     def _get_virtual_joints(self) -> typing.Set[str]:
         """Return a set of joint names that are used for virtual IO/control."""

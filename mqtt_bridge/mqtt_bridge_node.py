@@ -697,6 +697,14 @@ class MQTTBridgeNode(Node):
                         )
                         self._sdk_twin = None
 
+                    _camera_name = None
+                    if self._sdk_twin and hasattr(self._sdk_twin, "default_camera_name"):
+                        _camera_name = self._sdk_twin.default_camera_name
+                    if not _camera_name and self._mapping:
+                        _camera_name = self._mapping.raw.get("camera", {}).get("camera_name")
+                    if not _camera_name:
+                        _camera_name = "default"
+
                     self._ros_streamer = ROSCameraStreamer(
                         node=self,
                         force_relay=force_turn,
@@ -705,6 +713,7 @@ class MQTTBridgeNode(Node):
                         fps=self.get_parameter("webrtc.fps").value,
                         time_reference=TimeReference(),
                         turn_servers=ice_servers,
+                        camera_name=_camera_name,
                     )
                     # Initialize the track immediately to start /image_raw subscription
                     self._ros_streamer.initialize_track()
